@@ -75,11 +75,13 @@ async def create_xrocket_invoice(amount_usdt: float, description: str, payload: 
         logger.error("❌ XROCKET_TOKEN не задан!")
         return None
 
-    url = "https://pay.xrocket.exchange/api/v1/invoice/create"
+    # Исправлено: верный URL для создания инвойсов v1
+    url = "https://xrocket.exchange"
 
+    # Исправлено: заголовок авторизации называется "Rocket-Pay-Key", а не "Api-Key"
     headers = {
         **HEADERS,
-        "Api-Key": XROCKET_TOKEN,
+        "Rocket-Pay-Key": XROCKET_TOKEN,
         "Content-Type": "application/json"
     }
 
@@ -93,18 +95,16 @@ async def create_xrocket_invoice(amount_usdt: float, description: str, payload: 
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(url, headers=headers, json=data, timeout=20) as resp:
-                # Читаем текст ответа
                 raw_resp = await resp.text()
 
-                # Проверяем, не HTML ли это (защита Cloudflare)
                 if "<html" in raw_resp.lower():
                     logger.error("❌ XRocket Cloudflare Block: Запрос заблокирован защитой.")
                     return None
 
                 if resp.status == 200:
                     res = await resp.json()
-                    # Возвращаем ссылку (payUrl или link)
-                    return res.get("data", {}).get("payUrl") or res.get("data", {}).get("link")
+                    # Исправлено: поле ссылки в объекте инвойса называется "link"
+                    return res.get("data", {}).get("link")
 
                 logger.error(f"XRocket API Error {resp.status}: {raw_resp}")
         except Exception as e:
@@ -116,16 +116,23 @@ async def check_xrocket_invoice(invoice_id: str) -> bool:
     """Проверка статуса оплаты XRocket"""
     if not XROCKET_TOKEN: return False
 
-    url = f"https://pay.xrocket.exchange/api/v1/invoice/{invoice_id}"
-    headers = {**HEADERS, "Api-Key": XROCKET_TOKEN}
+    # Исправлено: верный эндпоинт v1 для получения информации об инвойсе
+    url = f"https://xrocket.exchange/{invoice_id}"
+
+    # Исправлено: верный заголовок авторизации "Rocket-Pay-Key"
+    headers = {**HEADERS, "Rocket-Pay-Key": XROCKET_TOKEN}
 
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url, headers=headers, timeout=15) as resp:
+                raw_resp = await resp.text()
+
                 if resp.status == 200:
                     res = await resp.json()
-                    # Проверяем статус в поле data
-                    return res.get("data", {}).get("status") == "paid"
+                    # Исправлено: успешный статус в XRocket называется "PAID" (капсом)
+                    return res.get("data", {}).get("status") == "PAID"
+
+                logger.error(f"XRocket Check Error {resp.status}: {raw_resp}")
         except Exception as e:
             logger.exception(f"XRocket Check Error: {e}")
     return False
