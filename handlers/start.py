@@ -47,6 +47,15 @@ class AdminBroadcastState(StatesGroup):
 
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+def make_progress_bar(current: int, total: int, length: int = 10) -> str:
+    if total <= 0:
+        return "[░░░░░░░░░░] 0%"
+    filled = int(length * current / total)
+    bar = "▓" * filled + "░" * (length - filled)
+    percent = int(current / total * 100)
+    return f"[{bar}] {percent}% ({current}/{total})"
+
+
 async def is_subscribed(bot: Bot, user_id: int) -> bool:
     if not CHANNEL_ID:
         return True
@@ -151,7 +160,7 @@ async def profile_btn(message: Message, state: FSMContext, bot: Bot):
     )
 
 
-# --- ПОДПИСКА И ОПЛАТА (Telegram Stars, CryptoBot, XRocket) ---
+# --- ПОДПИСКА И ОПЛАТА (Stars, CryptoBot, XRocket) ---
 @router.message(F.text.contains("Подписка"))
 async def subscription_btn(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
@@ -238,12 +247,11 @@ async def pay_cryptobot_handler(call: CallbackQuery):
     await call.answer()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔗 Оплатить через CryptoBot", url="https://t.me/CryptoBot")],
-        # Ссылка на бота оплаты или ваш инвойс
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_sub")]
     ])
     await call.message.edit_text(
         "🤖 <b>Оплата через CryptoBot</b>\n\n"
-        "Нажмите кнопку ниже для перехода к оплате подписки в CryptoBot:",
+        "Нажмите кнопку ниже для перевода средств и получения подписки:",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -253,12 +261,12 @@ async def pay_cryptobot_handler(call: CallbackQuery):
 async def pay_xrocket_handler(call: CallbackQuery):
     await call.answer()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Оплатить через XRocket", url="https://t.me/xrocket")],  # Ссылка на XRocket
+        [InlineKeyboardButton(text="🚀 Оплатить через XRocket", url="https://t.me/xrocket")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_sub")]
     ])
     await call.message.edit_text(
         "🚀 <b>Оплата через XRocket</b>\n\n"
-        "Нажмите кнопку ниже для перехода к оплате подписки в XRocket:",
+        "Нажмите кнопку ниже для перехода к оплате:",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -297,8 +305,7 @@ async def connect_accs_btn(message: Message, state: FSMContext, bot: Bot):
             [InlineKeyboardButton(text="💳 Купить подписку", callback_data="back_to_sub")]
         ])
         return await message.answer(
-            f"❌ <b>Для подключения аккаунтов необходима активная подписка!</b>\n\n"
-            f"Приобретите подписку в разделе «💳 Подписка»:",
+            f"❌ <b>Для подключения аккаунтов необходима активная подписка!</b>",
             reply_markup=keyboard,
             parse_mode="HTML"
         )
@@ -362,7 +369,7 @@ async def show_vk_accounts_list(call: CallbackQuery):
     await call.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
-# --- МАССОВАЯ ЗАГРУЗКА АККАУНТОВ ---
+# --- МАССОВАЯ ЗАГРУЗКА АККАУНТОВ С ПРОГРЕСС-БАРОМ ---
 @router.callback_query(F.data == "vk_add_bulk")
 async def start_add_bulk(call: CallbackQuery, state: FSMContext):
     await call.answer()
@@ -403,8 +410,9 @@ async def process_accounts_input(message: Message, state: FSMContext, bot: Bot):
     if not raw_accounts:
         return await message.answer("❌ Сообщение или файл не содержат строк.")
 
-    status_msg = await message.answer(f"⏳ <b>Проверяем аккаунты через VK API (0/{len(raw_accounts)})...</b>",
-                                      parse_mode="HTML")
+    total = len(raw_accounts)
+    bar_str = make_progress_bar(0, total)
+    status_msg = await message.answer(f"⏳ <b>Проверка аккаунтов через VK API...</b>\n{bar_str}", parse_mode="HTML")
 
     valid_added = 0
     invalid_count = 0
@@ -424,12 +432,12 @@ async def process_accounts_input(message: Message, state: FSMContext, bot: Bot):
             report_lines.append(f"🟢 <b>{acc_info['name']}</b> | Друзей: {acc_info['friends']}")
         else:
             invalid_count += 1
-            report_lines.append("🔴 Невалидный аккаунт / Ошибка")
+            report_lines.append("🔴 Невалидный аккаунт")
 
-        if idx % 5 == 0 or idx == len(raw_accounts):
+        if idx % 3 == 0 or idx == total:
+            current_bar = make_progress_bar(idx, total)
             try:
-                await status_msg.edit_text(f"⏳ <b>Проверяем аккаунты... ({idx}/{len(raw_accounts)})</b>",
-                                           parse_mode="HTML")
+                await status_msg.edit_text(f"⏳ <b>Проверка аккаунтов...</b>\n{current_bar}", parse_mode="HTML")
             except Exception:
                 pass
 
@@ -463,7 +471,7 @@ async def clear_all_accs(call: CallbackQuery):
                                  parse_mode="HTML")
 
 
-# --- РАССЫЛКА ПО ДРУЗЬЯМ VK ---
+# --- РАССЫЛКА ПО ДРУЗЬЯМ VK С ПРОГРЕСС-БАРОМ ---
 @router.message(F.text.contains("Начать рассылку"))
 async def start_broadcast_btn(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
@@ -498,7 +506,7 @@ async def start_broadcast_btn(message: Message, state: FSMContext, bot: Bot):
     await message.answer(
         f"🚀 <b>Запуск рассылки по друзьям VK</b>\n\n"
         f"✅ Готово аккаунтов к работе: <b>{len(valid_accs)}</b>\n\n"
-        f"💬 Отправьте <b>текст сообщения</b>, который будет разослан друзьям со всех ваших валидных аккаунтов:",
+        f"💬 Отправьте <b>текст сообщения</b> для рассылки друзьям со всех аккаунтов:",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -513,29 +521,45 @@ async def process_broadcast_execution(message: Message, state: FSMContext):
     accounts = db.get_user_vk_accounts(user_id)
     valid_accs = [a for a in accounts if a.get('is_valid', True)]
 
-    status_msg = await message.answer(
-        "🚀 <b>Рассылка по друзьям запущена...</b>\n\nПолучаем список друзей для каждого аккаунта...", parse_mode="HTML")
+    status_msg = await message.answer("🚀 <b>Сбор списка друзей и подготовка рассылки...</b>", parse_mode="HTML")
+
+    # Собираем всех получателей со всех аккаунтов
+    tasks_pool = []
+    for acc in valid_accs:
+        token = acc['token']
+        friend_ids = await get_vk_friends(token)
+        if friend_ids:
+            for fid in friend_ids:
+                tasks_pool.append((token, fid))
+
+    total_targets = len(tasks_pool)
+    if total_targets == 0:
+        return await status_msg.edit_text("❌ <b>Не найдено друзей ни на одном из подключенных аккаунтов!</b>",
+                                          parse_mode="HTML")
 
     total_success = 0
     total_errors = 0
 
-    for acc in valid_accs:
-        token = acc['token']
-        acc_name = acc.get('name', 'Аккаунт')
+    for idx, (token, fid) in enumerate(tasks_pool, 1):
+        res = await send_vk_message(token=token, target=str(fid), text=broadcast_text)
+        if res.get("success"):
+            total_success += 1
+        else:
+            total_errors += 1
 
-        # Получаем список ID друзей текущего аккаунта
-        friend_ids = await get_vk_friends(token)
-        if not friend_ids:
-            continue
+        if idx % 3 == 0 or idx == total_targets:
+            bar = make_progress_bar(idx, total_targets)
+            try:
+                await status_msg.edit_text(
+                    f"🚀 <b>Рассылка по друзьям идет...</b>\n"
+                    f"{bar}\n"
+                    f"📤 Успешно: {total_success} | 🔴 Ошибок: {total_errors}",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
 
-        for friend_id in friend_ids:
-            res = await send_vk_message(token=token, target=str(friend_id), text=broadcast_text)
-            if res.get("success"):
-                total_success += 1
-            else:
-                total_errors += 1
-
-            await asyncio.sleep(1.5)  # Пауза между сообщениями во избежание флуд-контроля VK
+        await asyncio.sleep(1.2)
 
     await status_msg.edit_text(
         f"✅ <b>Рассылка по друзьям завершена!</b>\n\n"
