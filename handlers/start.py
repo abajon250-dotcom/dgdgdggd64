@@ -164,9 +164,9 @@ async def subscription_btn(message: Message, state: FSMContext, bot: Bot):
     await state.set_state(SubscriptionState.choosing_tariff)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚡ 1 ДЕНЬ — 3.5 USDT (50 ⭐)", callback_data="tariff_1")],
-        [InlineKeyboardButton(text="🔥 7 ДНЕЙ — 5.0 USDT (140 ⭐)", callback_data="tariff_7")],
-        [InlineKeyboardButton(text="🚀 30 ДНЕЙ — 16.0 USDT (340 ⭐)", callback_data="tariff_30")]
+        [InlineKeyboardButton(text="⚡ 1 ДЕНЬ — 3.5 USDT", callback_data="tariff_1")],
+        [InlineKeyboardButton(text="🔥 7 ДНЕЙ — 5.0 USDT", callback_data="tariff_7")],
+        [InlineKeyboardButton(text="🚀 30 ДНЕЙ — 16.0 USDT", callback_data="tariff_30")]
     ])
 
     await message.answer(
