@@ -462,20 +462,86 @@ async def process_broadcast_execution(message: Message, state: FSMContext):
     )
 
 
-# --- АДМИН ПАНЕЛЬ ---
-@router.message(F.text.contains("Админ панель"))
-async def admin_panel_btn(message: Message, state: FSMContext, bot: Bot):
-    await state.clear()
-    user_id = message.from_user.id
-    if ADMIN_IDS and user_id not in ADMIN_IDS:
-        return await message.answer("❌ <b>У вас нет доступа к админ-панели!</b>", parse_mode="HTML")
+# --- АДМИН ПАНЕЛЬ: КНОПКИ И ОБРАБОТЧИКИ ---
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎁 Выдать подписку", callback_data="admin_give_sub")],
-        [InlineKeyboardButton(text="🚫 Забрать подписку", callback_data="admin_revoke_sub")],
-        [InlineKeyboardButton(text="❌ Закрыть", callback_data="admin_close")]
-    ])
-    await message.answer("👑 <b>Админ-панель управления Zenith VK:</b>", reply_markup=keyboard, parse_mode="HTML")
+@router.callback_query(F.data == "admin_give_sub")
+async def admin_give_sub_start(call: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminGiveSubState.waiting_for_user_id)
+    await call.message.edit_text("👤 Введите <b>Telegram ID</b> пользователя для выдачи подписки:", parse_mode="HTML")
+
+
+@router.message(AdminGiveSubState.waiting_for_user_id)
+async def admin_give_sub_id(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        return await message.answer("❌ Введите корректный ID (число).")
+    await state.update_data(target_user=int(message.text))
+    await state.set_state(AdminGiveSubState.waiting_for_duration)
+    await message.answer("⏳ Введите <b>количество дней</b> подписки:", parse_mode="HTML")
+
+
+@router.message(AdminGiveSubState.waiting_for_duration)
+async def admin_give_sub_finish(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        return await message.answer("❌ Введите количество дней числом.")
+
+    data = await state.get_data()
+    target_user = data['target_user']
+    days = int(message.text)
+
+    # Предполагаем, что в db.py есть функция give_subscription
+    db.give_subscription(target_user, days)
+
+    await state.clear()
+    await message.answer(f"✅ Подписка пользователю <code>{target_user}</code> выдана на {days} дней!",
+                         parse_mode="HTML")
+
+
+@router.callback_query(F.data == "admin_revoke_sub")
+async def admin_revoke_sub_start(call: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminRevokeSubState.waiting_for_user_id)
+    await call.message.edit_text("👤 Введите <b>Telegram ID</b> пользователя, у которого нужно забрать подписку:",
+                                 parse_mode="HTML")
+
+
+@router.message(AdminRevokeSubState.waiting_for_user_id)
+async def admin_revoke_sub_finish(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        return await message.answer("❌ Введите корректный ID.")
+
+    db.revoke_subscription(int(message.text))
+    await state.clear()
+    await message.answer(f"🚫 Подписка у пользователя <code>{message.text}</code> успешно удалена.", parse_mode="HTML")
+
+
+@router.callback_query(F.data == "admin_broadcast")
+async def admin_broadcast_start(call: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminBroadcastState.waiting_for_message)
+    await call.message.edit_text("📢 Введите <b>текст рассылки</b> для всех пользователей бота:", parse_mode="HTML")
+
+
+@router.message(AdminBroadcastState.waiting_for_message)
+async def admin_broadcast_finish(message: Message, state: FSMContext):
+    text = message.text
+    users = db.get_all_users()  # Предполагаем метод получения списка всех юзеров
+
+    count = 0
+    for user in users:
+        try:
+            await message.bot.send_message(user[0], text, parse_mode="HTML")
+            count += 1
+            await asyncio.sleep(0.05)
+        except:
+            pass
+
+    await state.clear()
+    await message.answer(f"✅ Рассылка завершена. Сообщение получили <b>{count}</b> пользователей.", parse_mode="HTML")
+
+
+@router.callback_query(F.data == "admin_bot_stats")
+async def admin_stats(call: CallbackQuery):
+    users_count = db.get_users_count()
+    await call.message.edit_text(f"📊 <b>Статистика бота:</b>\n\n👥 Всего пользователей: <b>{users_count}</b>",
+                                 parse_mode="HTML")
 
 
 @router.callback_query(F.data == "admin_close")
