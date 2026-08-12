@@ -14,13 +14,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 
 import db
-from services import payments
 from services.vk_service import check_vk_account, send_vk_message
 
 router = Router()
 
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "@ropemu")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 
 
@@ -89,7 +87,7 @@ async def send_welcome_menu(message: Message, user_id: int, first_name: str, use
     await message.answer(
         f"👋 <b>Привет, {first_name}!</b>\n\n"
         f"Добро пожаловать в <b>Zenith VK</b> — систему автоматизации и рассылок.\n"
-        f"Используйте кнопки меню ниже для работы с софтом:",
+        f"Используйте кнопки меню ниже:",
         reply_markup=reply_kb,
         parse_mode="HTML"
     )
@@ -241,7 +239,7 @@ async def back_to_accs_menu(call: CallbackQuery, state: FSMContext):
     await connect_accs_btn(call.message, state, user_id=call.from_user.id)
 
 
-# --- ВЫВОД СПИСКА АККАУНТОВ С ФИО И ДРУЗЬЯМИ ---
+# --- СПИСОК АККАУНТОВ ---
 @router.callback_query(F.data == "vk_accounts_list")
 async def show_vk_accounts_list(call: CallbackQuery, bot: Bot):
     await call.answer()
@@ -274,7 +272,7 @@ async def show_vk_accounts_list(call: CallbackQuery, bot: Bot):
     await call.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
-# --- ДОБАВЛЕНИЕ И ПРОВЕРКА АККАУНТОВ ---
+# --- МАССОВАЯ ЗАГРУЗКА АККАУНТОВ ---
 @router.callback_query(F.data == "vk_add_bulk")
 async def start_add_bulk(call: CallbackQuery, state: FSMContext):
     await call.answer()
@@ -375,7 +373,7 @@ async def clear_all_accs(call: CallbackQuery):
                                  parse_mode="HTML")
 
 
-# --- РАБОЧИЙ МОДУЛЬ РАССЫЛКИ (ПРОЛИВ) ---
+# --- РАССЫЛКА VK ---
 @router.message(F.text.contains("Начать рассылку"))
 async def start_broadcast_btn(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
@@ -410,7 +408,7 @@ async def start_broadcast_btn(message: Message, state: FSMContext, bot: Bot):
     await message.answer(
         f"🚀 <b>Запуск рассылки VK</b>\n\n"
         f"✅ Готово аккаунтов к работе: <b>{len(valid_accs)}</b>\n\n"
-        f"Отправьте <b>ID получателя или ссылку на беседу/пользователя VK</b> (куда слать):",
+        f"Отправьте <b>ID получателя или ссылку на беседу/пользователя VK</b>:",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
