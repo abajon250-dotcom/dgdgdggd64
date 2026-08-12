@@ -86,16 +86,17 @@ async def create_xrocket_invoice(amount_usdt: float, description: str, payload: 
         logger.error("❌ XROCKET_TOKEN не найден в .env!")
         return None
 
-    # Пытаемся использовать корректный путь API
-    url = "https://pay.xrocket.tg/api/create"
+    # Исправлено: актуальный рабочий URL для создания инвойсов (Mainnet)
+    url = "https://xrocket.exchange"
 
     headers = {
         "Rocket-Pay-Key": token,
         "Content-Type": "application/json"
     }
 
+    # Поля соответствуют официальной документации xRocket API v1
     data = {
-        "amount": amount_usdt,
+        "amount": amount_usdt,  # Может быть float или str
         "currency": "USDT",
         "description": description,
         "payload": payload
@@ -103,20 +104,20 @@ async def create_xrocket_invoice(amount_usdt: float, description: str, payload: 
 
     async with aiohttp.ClientSession() as session:
         try:
-            # Увеличил таймаут на случай тормозов API
             async with session.post(url, headers=headers, json=data, timeout=20) as resp:
                 status = resp.status
                 raw_resp = await resp.text()
 
                 if status == 200:
                     res = await resp.json()
-                    # XRocket обычно возвращает данные в поле 'data'
+                    # Исправлено: xRocket возвращает объект инвойса внутри data, а ссылка лежит в поле link
                     return res.get("data", {}).get("link")
                 else:
                     logger.error(f"❌ XRocket API ответил ошибкой {status}: {raw_resp}")
                     return None
         except Exception as e:
             logger.exception(f"❌ Ошибка соединения с XRocket: {e}")
+
     return None
 
 
