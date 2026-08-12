@@ -24,7 +24,7 @@ class VKProlivStates(StatesGroup):
 async def check_access(event, user_id: int) -> bool:
     if not db.is_sub_active(user_id):
         sub_end = db.get_sub_end_date(user_id)
-        sub_info = f"\n\n<i>Ваша подписка истекла: {sub_end.strftime('%d.%m.%Y %H:%M')}</i>" if sub_end else ""
+        sub_info = f"\n\n<i>Ваша подписка истекла: {sub_end.strftime('%d.%m.%Y %H:%M:%S')}</i>" if sub_end else ""
         text = (
             "❌ <b>Доступ ограничен!</b>\n\n"
             "Для использования функций VK пролива требуется активная подписка."
@@ -287,7 +287,7 @@ async def get_delay_and_show_targets(message: Message, state: FSMContext):
                          parse_mode="HTML")
 
 
-# --- 4. ПРОЦЕСС РАССЫЛКИ С ПРОГРЕСС-БАРОМ ---
+# --- 4. ПРОЦЕСС РАССЫЛКИ С УЛУЧШЕННЫМ ПРОГРЕСС-БАРОМ И ИТОГОВОЙ ШТУКОЙ ---
 @router.callback_query(F.data.startswith("start_exec_"))
 async def execute_batch_proliv(call: CallbackQuery, state: FSMContext):
     if not await check_access(call, call.from_user.id):
@@ -304,13 +304,19 @@ async def execute_batch_proliv(call: CallbackQuery, state: FSMContext):
         return await call.message.edit_text("❌ Нет активных аккаунтов!")
 
     await state.set_state(None)
+
+    start_time = asyncio.get_event_loop().time()
+    success_sent = 0
+    fail_count = 0
+    total = len(accounts)
+
     progress_msg = await call.message.edit_text(
-        f"🚀 <b>Запуск рассылки по {target_name}...</b>\nАккаунтов: {len(accounts)}\n\n▓▓▓▓▓▓▓▓▓▓ 0%",
+        f"🚀 <b>Рассылка запущенна ({target_name})...</b>\n"
+        f"📦 Всего аккаунтов: <b>{total}</b>\n\n"
+        f"▒▒▒▒▒▒▒▒▒▒ 0% [0 / {total}]\n\n"
+        f"✅ Успешно: <code>0</code> | ❌ Ошибок: <code>0</code>",
         parse_mode="HTML"
     )
-
-    success_sent = 0
-    total = len(accounts)
 
     async with aiohttp.ClientSession() as session:
         for i, acc in enumerate(accounts, 1):
@@ -329,7 +335,6 @@ async def execute_batch_proliv(call: CallbackQuery, state: FSMContext):
                         items = res.get("response", {}).get("items", [])
                         recipients = [item["conversation"]["peer"]["id"] for item in items if "conversation" in item]
 
-                # Отправляем первое найденное сообщение / диалог
                 if recipients:
                     peer_id = recipients[0]
                     send_url = "https://api.vk.com/method/messages.send"
@@ -343,29 +348,50 @@ async def execute_batch_proliv(call: CallbackQuery, state: FSMContext):
                     async with session.post(send_url, data=payload, timeout=5) as send_resp:
                         if "response" in await send_resp.json():
                             success_sent += 1
+                        else:
+                            fail_count += 1
+                else:
+                    fail_count += 1
             except Exception:
-                pass
+                fail_count += 1
 
             await asyncio.sleep(delay)
 
-            # Обновление прогресс-бара
+            # Плавный прогресс-бар с живой статистикой и таймером
             percent = int((i / total) * 100)
-            bar = "█" * int(percent / 10) + "░" * (10 - int(percent / 10))
+            filled = int(percent / 10)
+            bar = "█" * filled + "░" * (10 - filled)
+            elapsed_sec = int(asyncio.get_event_loop().time() - start_time)
+
             try:
                 await progress_msg.edit_text(
-                    f"🚀 <b>Выполняется рассылка по {target_name}...</b>\n"
-                    f"{bar} {percent}% [{i} / {total}]\n✅ Успешно отправлено: {success_sent}",
+                    f"🚀 <b>Выполняется рассылка по {target_name}...</b>\n\n"
+                    f"{bar} <b>{percent}%</b> [{i} / {total}]\n\n"
+                    f"✅ Успешно: <code>{success_sent}</code> | ❌ Ошибок: <code>{fail_count}</code>\n"
+                    f"⏱ Прошло времени: <code>{elapsed_sec} сек.</code>",
                     parse_mode="HTML"
                 )
             except Exception:
                 pass
 
+    # ИТОГОВАЯ «ШТУКА» (КРУТОЙ ИНФОРМАТИВНЫЙ ОТЧЕТ)
+    total_time = int(asyncio.get_event_loop().time() - start_time)
+    success_rate = round((success_sent / total) * 100, 1) if total > 0 else 0
+
+    summary_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Запустить повторно", callback_data="vk_start_proliv")],
+        [InlineKeyboardButton(text="🔙 В меню VK", callback_data="vk_menu")]
+    ])
+
     await progress_msg.edit_text(
-        f"🎉 <b>Рассылка завершена!</b>\n\n"
+        f"📊 <b>Итоги рассылки (Пролив завершен):</b>\n\n"
         f"🎯 Аудитория: <b>{target_name}</b>\n"
-        f"✅ Отправлено сообщений: <b>{success_sent}</b> из <b>{total}</b>",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="🔙 В меню VK", callback_data="vk_menu")]]),
+        f"📦 Всего аккаунтов обработано: <b>{total}</b>\n"
+        f"✅ Успешно отправлено: <b>{success_sent}</b>\n"
+        f"❌ Ошибок / Сбоев: <b>{fail_count}</b>\n"
+        f"📈 Конверсия успеха: <b>{success_rate}%</b>\n"
+        f"⏱ Затрачено времени: <b>{total_time} сек.</b>",
+        reply_markup=summary_keyboard,
         parse_mode="HTML"
     )
 
@@ -379,7 +405,7 @@ async def vk_stats_action(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     acc_count = len(data.get("valid_accounts", []))
     sub_end = db.get_sub_end_date(call.from_user.id)
-    sub_str = sub_end.strftime("%d.%m.%Y %H:%M") if sub_end else "Нет подписки"
+    sub_str = sub_end.strftime("%d.%m.%Y %H:%M:%S") if sub_end else "Нет подписки"
 
     await call.message.edit_text(
         f"📊 <b>Статистика VK модуля:</b>\n\n"
