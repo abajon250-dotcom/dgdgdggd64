@@ -17,7 +17,7 @@ from aiogram.fsm.state import StatesGroup, State
 
 import db
 from services.vk_service import check_vk_account, send_vk_message, get_vk_friends
-from services.payments import create_cryptobot_invoice, check_cryptobot_invoice, create_xrocket_invoice
+from services.payments import create_cryptobot_invoice, check_cryptobot_invoice
 
 router = Router()
 
@@ -196,10 +196,10 @@ async def process_tariff_selection(call: CallbackQuery, state: FSMContext):
     await state.update_data(days=days, amount=amount_stars, tariff_name=tariff_name)
     await state.set_state(SubscriptionState.choosing_payment)
 
+    # Кнопка XRocket удалена, остались только Stars и CryptoBot
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⭐ Telegram Stars", callback_data="pay_method_stars")],
         [InlineKeyboardButton(text="🤖 CryptoBot", callback_data="pay_method_cryptobot")],
-        [InlineKeyboardButton(text="🚀 XRocket", callback_data="pay_method_xrocket")],
         [InlineKeyboardButton(text="🔙 Назад к тарифам", callback_data="back_to_tariffs")]
     ])
 
@@ -266,28 +266,6 @@ async def process_payment_method(call: CallbackQuery, state: FSMContext, bot: Bo
             f"🤖 <b>Оплата через CryptoBot</b>\n\n"
             f"Тариф: {tariff_name} — <b>{price_usdt} USDT</b>\n"
             f"Нажмите кнопку ниже для перехода к оплате. После оплаты нажмите <b>«Проверить оплату»</b>:",
-            reply_markup=keyboard,
-            parse_mode="HTML"
-        )
-
-    elif method == "xrocket":
-        pay_url = await create_xrocket_invoice(
-            amount_usdt=price_usdt,
-            description=f"Подписка Zenith VK на {tariff_name}",
-            payload=payload
-        )
-
-        if not pay_url:
-            return await call.message.edit_text("❌ Ошибка создания счета в XRocket. Проверьте токен в .env файле.")
-
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Оплатить в XRocket", url=pay_url)],
-            [InlineKeyboardButton(text="🔙 Назад к тарифам", callback_data="back_to_tariffs")]
-        ])
-        await call.message.edit_text(
-            f"🚀 <b>Оплата через XRocket</b>\n\n"
-            f"Тариф: {tariff_name} — <b>{price_usdt} USDT</b>\n"
-            f"Нажмите кнопку ниже для перехода к оплате:",
             reply_markup=keyboard,
             parse_mode="HTML"
         )
