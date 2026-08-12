@@ -4,26 +4,29 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 
 router = Router()
 
-# Цены подписок (дни: стоимость в USDT)
+# ВЕРНУТЫЕ ЕБАНЫЕ РАСЦЕНКИ (дни: стоимость в USDT)
 PRICES = {
     1: 2.0,
     7: 10.0,
     30: 30.0
 }
 
-# Вставьте ваш токен от @CryptoBot (получить у @CryptoBot -> Pay)
+# Токен от @CryptoBot (получить у @CryptoBot -> Pay)
 CRYPTO_BOT_TOKEN = "ВАШ_ТОКЕН_CRYPTO_BOT"
 
-
-@router.message(F.text == "💎 Подписка")
-async def sub_menu(message: Message):
+@router.message(F.text.contains("Подписка"))
+@router.callback_query(F.data == "sub_menu")
+async def sub_menu(event: Message | CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"📅 {days} дней — {price}$", callback_data=f"buy_sub_{days}")]
+        [InlineKeyboardButton(text=f"📅 {days} дней — {price} USDT", callback_data=f"buy_sub_{days}")]
         for days, price in PRICES.items()
     ])
-    await message.answer("🛒 **Выберите срок подписки для оплаты через CryptoBot:**", reply_markup=kb,
-                         parse_mode="Markdown")
-
+    text = "🛒 **Выберите срок подписки для оплаты через CryptoBot:**"
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+        await event.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    else:
+        await event.answer(text, reply_markup=kb, parse_mode="Markdown")
 
 @router.callback_query(F.data.startswith("buy_sub_"))
 async def create_invoice(call: CallbackQuery):
@@ -46,8 +49,7 @@ async def create_invoice(call: CallbackQuery):
                     pay_url = data["result"]["pay_url"]
                     kb = InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="💳 Оплатить счет", url=pay_url)],
-                        [InlineKeyboardButton(text="🔄 Проверить оплату",
-                                              callback_data=f"check_pay_{data['result']['invoice_id']}")]
+                        [InlineKeyboardButton(text="🔙 Назад", callback_data="sub_menu")]
                     ])
                     await call.message.edit_text(
                         f"✅ **Инвойс успешно создан!**\n\n"
