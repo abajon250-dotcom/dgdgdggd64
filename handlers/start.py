@@ -4,7 +4,6 @@ from aiogram import Router, F, Bot
 from aiogram.types import (
     Message,
     CallbackQuery,
-    PreCheckoutQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     ReplyKeyboardMarkup,
@@ -16,7 +15,6 @@ from aiogram.fsm.state import StatesGroup, State
 
 import db
 from services import payments
-# Импортируем твои сервисы
 from services.vk_service import check_vk_account, send_vk_message
 
 router = Router()
@@ -38,6 +36,7 @@ class BroadcastState(StatesGroup):
 
 class AdminGiveSubState(StatesGroup):
     waiting_for_user_id = State()
+    waiting_for_duration = State()
 
 
 class AdminRevokeSubState(StatesGroup):
@@ -259,7 +258,7 @@ async def show_vk_accounts_list(call: CallbackQuery, bot: Bot):
 
     text = f"📂 <b>Ваши аккаунты VK ({len(accounts)} шт.):</b>\n\n"
 
-    for acc in accounts[:15]:  # Выводим списком первые 15
+    for acc in accounts[:15]:
         full_name = acc.get('name', 'Неизвестно')
         friends = acc.get('friends', 0)
         is_valid = acc.get('is_valid', True)
@@ -324,7 +323,6 @@ async def process_accounts_input(message: Message, state: FSMContext, bot: Bot):
     report_lines = []
 
     for idx, raw_acc in enumerate(raw_accounts, 1):
-        # Используем функцию из vk_service.py
         acc_info = await check_vk_account(raw_acc)
 
         if acc_info['valid']:
@@ -442,9 +440,8 @@ async def process_broadcast_execution(message: Message, state: FSMContext):
     success = 0
     errors = 0
 
-    for idx, acc in enumerate(valid_accs, 1):
+    for acc in valid_accs:
         token = acc['token']
-        # Вызываем функцию отправки сообщения из vk_service.py
         res = await send_vk_message(token=token, target=target, text=broadcast_text)
 
         if res.get("success"):
@@ -452,7 +449,7 @@ async def process_broadcast_execution(message: Message, state: FSMContext):
         else:
             errors += 1
 
-        await asyncio.sleep(1)  # Задержка 1 сек, чтобы VK не банил аккаунты
+        await asyncio.sleep(1)
 
     await status_msg.edit_text(
         f"✅ <b>Рассылка завершена!</b>\n\n"
@@ -462,7 +459,23 @@ async def process_broadcast_execution(message: Message, state: FSMContext):
     )
 
 
-# --- АДМИН ПАНЕЛЬ: КНОПКИ И ОБРАБОТЧИКИ ---
+# --- АДМИН-ПАНЕЛЬ ---
+@router.message(F.text.contains("Админ панель"))
+async def admin_panel_btn(message: Message, state: FSMContext, bot: Bot):
+    await state.clear()
+    user_id = message.from_user.id
+    if ADMIN_IDS and user_id not in ADMIN_IDS:
+        return await message.answer("❌ <b>У вас нет доступа к админ-панели!</b>", parse_mode="HTML")
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Статистика бота", callback_data="admin_bot_stats")],
+        [InlineKeyboardButton(text="🎁 Выдать подписку", callback_data="admin_give_sub")],
+        [InlineKeyboardButton(text="🚫 Забрать подписку", callback_data="admin_revoke_sub")],
+        [InlineKeyboardButton(text="📢 Рассылка по юзерам", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="❌ Закрыть", callback_data="admin_close")]
+    ])
+    await message.answer("👑 <b>Админ-панель управления Zenith VK:</b>", reply_markup=keyboard, parse_mode="HTML")
+
 
 @router.callback_query(F.data == "admin_give_sub")
 async def admin_give_sub_start(call: CallbackQuery, state: FSMContext):
@@ -488,7 +501,6 @@ async def admin_give_sub_finish(message: Message, state: FSMContext):
     target_user = data['target_user']
     days = int(message.text)
 
-    # Предполагаем, что в db.py есть функция give_subscription
     db.give_subscription(target_user, days)
 
     await state.clear()
@@ -520,17 +532,17 @@ async def admin_broadcast_start(call: CallbackQuery, state: FSMContext):
 
 
 @router.message(AdminBroadcastState.waiting_for_message)
-async def admin_broadcast_finish(message: Message, state: FSMContext):
+async def admin_broadcast_finish(message: Message, state: FSMContext, bot: Bot):
     text = message.text
-    users = db.get_all_users()  # Предполагаем метод получения списка всех юзеров
+    users = db.get_all_users()
 
     count = 0
     for user in users:
         try:
-            await message.bot.send_message(user[0], text, parse_mode="HTML")
+            await bot.send_message(user[0], text, parse_mode="HTML")
             count += 1
             await asyncio.sleep(0.05)
-        except:
+        except Exception:
             pass
 
     await state.clear()
