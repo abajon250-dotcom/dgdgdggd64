@@ -17,6 +17,7 @@ from aiogram.fsm.state import StatesGroup, State
 
 import db
 from services.vk_service import check_vk_account, send_vk_message, get_vk_friends
+from services.payments import create_cryptobot_invoice, check_cryptobot_invoice, create_xrocket_invoice
 
 router = Router()
 
@@ -36,19 +37,6 @@ class BroadcastState(StatesGroup):
 class SubscriptionState(StatesGroup):
     choosing_tariff = State()
     choosing_payment = State()
-
-
-class AdminGiveSubState(StatesGroup):
-    waiting_for_user_id = State()
-    waiting_for_duration = State()
-
-
-class AdminRevokeSubState(StatesGroup):
-    waiting_for_user_id = State()
-
-
-class AdminBroadcastState(StatesGroup):
-    waiting_for_message = State()
 
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
@@ -156,7 +144,7 @@ async def profile_btn(message: Message, state: FSMContext, bot: Bot):
     )
 
 
-# --- ПОДПИСКА И ОПЛАТА (Выбор тарифа -> Выбор метода -> Инвойс) ---
+# --- ПОДПИСКА И ОПЛАТА ---
 @router.message(F.text.contains("Подписка"))
 async def subscription_btn(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
@@ -176,9 +164,9 @@ async def subscription_btn(message: Message, state: FSMContext, bot: Bot):
     await state.set_state(SubscriptionState.choosing_tariff)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚡ 1 ДЕНЬ — 50 ⭐", callback_data="tariff_1")],
-        [InlineKeyboardButton(text="🔥 7 ДНЕЙ — 140 ⭐", callback_data="tariff_7")],
-        [InlineKeyboardButton(text="🚀 30 ДНЕЙ — 340 ⭐", callback_data="tariff_30")]
+        [InlineKeyboardButton(text="⚡ 1 ДЕНЬ — 3.5 USDT (50 ⭐)", callback_data="tariff_1")],
+        [InlineKeyboardButton(text="🔥 7 ДНЕЙ — 5.0 USDT (140 ⭐)", callback_data="tariff_7")],
+        [InlineKeyboardButton(text="🚀 30 ДНЕЙ — 16.0 USDT (340 ⭐)", callback_data="tariff_30")]
     ])
 
     await message.answer(
@@ -197,15 +185,15 @@ async def process_tariff_selection(call: CallbackQuery, state: FSMContext):
 
     if days == 1:
         tariff_name = "1 день"
-        amount = 50
+        amount_stars = 50
     elif days == 7:
         tariff_name = "7 дней"
-        amount = 140
+        amount_stars = 140
     else:
         tariff_name = "30 дней"
-        amount = 340
+        amount_stars = 340
 
-    await state.update_data(days=days, amount=amount, tariff_name=tariff_name)
+    await state.update_data(days=days, amount=amount_stars, tariff_name=tariff_name)
     await state.set_state(SubscriptionState.choosing_payment)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -216,7 +204,7 @@ async def process_tariff_selection(call: CallbackQuery, state: FSMContext):
     ])
 
     await call.message.edit_text(
-        f"💳 <b>Выбран тариф:</b> {tariff_name.upper()} — {amount} ⭐\n\n"
+        f"💳 <b>Выбран тариф:</b> {tariff_name.upper()}\n\n"
         f"Выберите способ оплаты:",
         reply_markup=keyboard,
         parse_mode="HTML"
@@ -231,48 +219,95 @@ async def back_to_tariffs_handler(call: CallbackQuery, state: FSMContext, bot: B
 
 @router.callback_query(SubscriptionState.choosing_payment, F.data.startswith("pay_method_"))
 async def process_payment_method(call: CallbackQuery, state: FSMContext, bot: Bot):
-    await call.answer()
+    await call.answer("Генерирую платежную ссылку...", show_alert=False)
     method = call.data.split("_")[2]
     data = await state.get_data()
     days = data.get("days", 1)
-    amount = data.get("amount", 50)
+    amount_stars = data.get("amount", 50)
     tariff_name = data.get("tariff_name", "1 день")
 
+    usdt_prices = {
+        1: 3.5,
+        7: 5.0,
+        30: 16.0
+    }
+    price_usdt = usdt_prices.get(days, 3.5)
+    payload = f"sub_{days}days_user_{call.from_user.id}"
+
     if method == "stars":
-        payload = f"sub_{days}days"
-        prices = [LabeledPrice(label="XTR", amount=amount)]
+        payload_tg = f"sub_{days}days"
+        prices = [LabeledPrice(label="XTR", amount=amount_stars)]
         await bot.send_invoice(
             chat_id=call.from_user.id,
             title=f"Подписка на {tariff_name}",
             description=f"Доступ к Zenith VK на {tariff_name}",
-            payload=payload,
+            payload=payload_tg,
             currency="XTR",
             prices=prices
         )
+        await call.message.delete()
+
     elif method == "cryptobot":
+        pay_url, invoice_id = await create_cryptobot_invoice(
+            amount_usdt=price_usdt,
+            description=f"Подписка Zenith VK на {tariff_name}",
+            payload=payload
+        )
+
+        if not pay_url:
+            return await call.message.edit_text("❌ Ошибка создания счета в CryptoBot. Проверьте токен в .env файле.")
+
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 Оплатить через CryptoBot", url="https://t.me/CryptoBot")],
+            [InlineKeyboardButton(text="🔗 Оплатить в CryptoBot", url=pay_url)],
+            [InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_crypto_{invoice_id}_{days}")],
             [InlineKeyboardButton(text="🔙 Назад к тарифам", callback_data="back_to_tariffs")]
         ])
         await call.message.edit_text(
             f"🤖 <b>Оплата через CryptoBot</b>\n\n"
-            f"Тариф: {tariff_name} ({amount} ⭐)\n"
-            f"Нажмите кнопку ниже для перехода к оплате подписки в CryptoBot:",
+            f"Тариф: {tariff_name} — <b>{price_usdt} USDT</b>\n"
+            f"Нажмите кнопку ниже для перехода к оплате. После оплаты нажмите <b>«Проверить оплату»</b>:",
             reply_markup=keyboard,
             parse_mode="HTML"
         )
+
     elif method == "xrocket":
+        pay_url = await create_xrocket_invoice(
+            amount_usdt=price_usdt,
+            description=f"Подписка Zenith VK на {tariff_name}",
+            payload=payload
+        )
+
+        if not pay_url:
+            return await call.message.edit_text("❌ Ошибка создания счета в XRocket. Проверьте токен в .env файле.")
+
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Оплатить через XRocket", url="https://t.me/xrocket")],
+            [InlineKeyboardButton(text="🚀 Оплатить в XRocket", url=pay_url)],
             [InlineKeyboardButton(text="🔙 Назад к тарифам", callback_data="back_to_tariffs")]
         ])
         await call.message.edit_text(
             f"🚀 <b>Оплата через XRocket</b>\n\n"
-            f"Тариф: {tariff_name} ({amount} ⭐)\n"
-            f"Нажмите кнопку ниже для перехода к оплате подписки в XRocket:",
+            f"Тариф: {tariff_name} — <b>{price_usdt} USDT</b>\n"
+            f"Нажмите кнопку ниже для перехода к оплате:",
             reply_markup=keyboard,
             parse_mode="HTML"
         )
+
+
+@router.callback_query(F.data.startswith("check_crypto_"))
+async def check_crypto_payment(call: CallbackQuery):
+    parts = call.data.split("_")
+    invoice_id = int(parts[2])
+    days = int(parts[3])
+
+    is_paid = await check_cryptobot_invoice(invoice_id)
+    if is_paid:
+        db.set_subscription(call.from_user.id, days)
+        await call.message.edit_text(
+            f"✅ <b>Оплата успешно подтверждена!</b> Подписка активирована на <b>{days}</b> дней. 🎉",
+            parse_mode="HTML"
+        )
+    else:
+        await call.answer("❌ Оплата еще не поступила. Попробуйте снова через пару секунд.", show_alert=True)
 
 
 @router.pre_checkout_query()
@@ -345,7 +380,6 @@ async def back_to_accs_menu(call: CallbackQuery, state: FSMContext, bot: Bot):
     await connect_accs_btn(call.message, state, bot)
 
 
-# --- СПИСОК АККАУНТОВ ---
 @router.callback_query(F.data == "vk_accounts_list")
 async def show_vk_accounts_list(call: CallbackQuery):
     await call.answer()
@@ -378,7 +412,6 @@ async def show_vk_accounts_list(call: CallbackQuery):
     await call.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
-# --- МАССОВАЯ ЗАГРУЗКА АККАУНТОВ ---
 @router.callback_query(F.data == "vk_add_bulk")
 async def start_add_bulk(call: CallbackQuery, state: FSMContext):
     await call.answer()
@@ -389,7 +422,7 @@ async def start_add_bulk(call: CallbackQuery, state: FSMContext):
     ])
 
     await call.message.edit_text(
-        "📥 <b>Загрузка VK аккаунтов</b>\n\n"
+        "📥 <b>Загрузка VK аккаунтов пачками</b>\n\n"
         "Отправьте сюда <b>.txt файл</b> с аккаунтами или отправьте их <b>текстом</b> (каждый с новой строки).\n\n"
         "📌 <i>Формат строк:</i>\n"
         "• <code>токен</code>\n"
@@ -476,7 +509,7 @@ async def clear_all_accs(call: CallbackQuery):
         [InlineKeyboardButton(text="🔙 Назад", callback_data="connect_accs_menu")]
     ])
     await call.message.edit_text("🗑 <b>Все ваши VK аккаунты успешно удалены!</b>", reply_markup=keyboard,
-                                   parse_mode="HTML")
+                                 parse_mode="HTML")
 
 
 # --- РАССЫЛКА ПО ДРУЗЬЯМ VK ---
@@ -557,106 +590,3 @@ async def process_broadcast_execution(message: Message, state: FSMContext):
         f"🔴 Ошибок отправки: <b>{total_errors}</b>",
         parse_mode="HTML"
     )
-
-
-# --- АДМИН-ПАНЕЛЬ ---
-@router.message(F.text.contains("Админ панель"))
-async def admin_panel_btn(message: Message, state: FSMContext, bot: Bot):
-    await state.clear()
-    user_id = message.from_user.id
-    if ADMIN_IDS and user_id not in ADMIN_IDS:
-        return await message.answer("❌ <b>У вас нет доступа к админ-панели!</b>", parse_mode="HTML")
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 Статистика бота", callback_data="admin_bot_stats")],
-        [InlineKeyboardButton(text="🎁 Выдать подписку", callback_data="admin_give_sub")],
-        [InlineKeyboardButton(text="🚫 Забрать подписку", callback_data="admin_revoke_sub")],
-        [InlineKeyboardButton(text="📢 Рассылка по юзерам", callback_data="admin_broadcast")],
-        [InlineKeyboardButton(text="❌ Закрыть", callback_data="admin_close")]
-    ])
-    await message.answer("👑 <b>Админ-панель управления Zenith VK:</b>", reply_markup=keyboard, parse_mode="HTML")
-
-
-@router.callback_query(F.data == "admin_give_sub")
-async def admin_give_sub_start(call: CallbackQuery, state: FSMContext):
-    await state.set_state(AdminGiveSubState.waiting_for_user_id)
-    await call.message.edit_text("👤 Введите <b>Telegram ID</b> пользователя для выдачи подписки:", parse_mode="HTML")
-
-
-@router.message(AdminGiveSubState.waiting_for_user_id)
-async def admin_give_sub_id(message: Message, state: FSMContext):
-    if not message.text.isdigit():
-        return await message.answer("❌ Введите корректный ID (число).")
-    await state.update_data(target_user=int(message.text))
-    await state.set_state(AdminGiveSubState.waiting_for_duration)
-    await message.answer("⏳ Введите <b>количество дней</b> подписки:", parse_mode="HTML")
-
-
-@router.message(AdminGiveSubState.waiting_for_duration)
-async def admin_give_sub_finish(message: Message, state: FSMContext):
-    if not message.text.isdigit():
-        return await message.answer("❌ Введите количество дней числом.")
-
-    data = await state.get_data()
-    target_user = data['target_user']
-    days = int(message.text)
-
-    db.set_subscription(target_user, days)
-
-    await state.clear()
-    await message.answer(f"✅ Подписка пользователю <code>{target_user}</code> выдана на {days} дней!",
-                         parse_mode="HTML")
-
-
-@router.callback_query(F.data == "admin_revoke_sub")
-async def admin_revoke_sub_start(call: CallbackQuery, state: FSMContext):
-    await state.set_state(AdminRevokeSubState.waiting_for_user_id)
-    await call.message.edit_text("👤 Введите <b>Telegram ID</b> пользователя, у которого нужно забрать подписку:",
-                                 parse_mode="HTML")
-
-
-@router.message(AdminRevokeSubState.waiting_for_user_id)
-async def admin_revoke_sub_finish(message: Message, state: FSMContext):
-    if not message.text.isdigit():
-        return await message.answer("❌ Введите корректный ID.")
-
-    db.revoke_subscription(int(message.text))
-    await state.clear()
-    await message.answer(f"🚫 Подписка у пользователя <code>{message.text}</code> успешно удалена.", parse_mode="HTML")
-
-
-@router.callback_query(F.data == "admin_broadcast")
-async def admin_broadcast_start(call: CallbackQuery, state: FSMContext):
-    await state.set_state(AdminBroadcastState.waiting_for_message)
-    await call.message.edit_text("📢 Введите <b>текст рассылки</b> для всех пользователей бота:", parse_mode="HTML")
-
-
-@router.message(AdminBroadcastState.waiting_for_message)
-async def admin_broadcast_finish(message: Message, state: FSMContext, bot: Bot):
-    text = message.text
-    users = db.get_all_users()
-
-    count = 0
-    for user in users:
-        try:
-            await bot.send_message(user[0], text, parse_mode="HTML")
-            count += 1
-            await asyncio.sleep(0.05)
-        except Exception:
-            pass
-
-    await state.clear()
-    await message.answer(f"✅ Рассылка завершена. Сообщение получили <b>{count}</b> пользователей.", parse_mode="HTML")
-
-
-@router.callback_query(F.data == "admin_bot_stats")
-async def admin_stats(call: CallbackQuery):
-    users_count = db.get_users_count()
-    await call.message.edit_text(f"📊 <b>Статистика бота:</b>\n\n👥 Всего пользователей: <b>{users_count}</b>",
-                                 parse_mode="HTML")
-
-
-@router.callback_query(F.data == "admin_close")
-async def admin_close_callback(call: CallbackQuery):
-    await call.answer()
-    await call.message.delete()
