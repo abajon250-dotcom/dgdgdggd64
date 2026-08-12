@@ -7,7 +7,9 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     ReplyKeyboardMarkup,
-    KeyboardButton
+    KeyboardButton,
+    LabeledPrice,
+    PreCheckoutQuery
 )
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -184,23 +186,72 @@ async def subscription_btn(message: Message, state: FSMContext, bot: Bot):
 async def show_tariffs(call: CallbackQuery):
     await call.answer()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚡ 1 день — $2.5 (50 ⭐)", callback_data="pay_1day")],
-        [InlineKeyboardButton(text="🔥 1 неделя — $7 (140 ⭐)", callback_data="pay_1week")],
-        [InlineKeyboardButton(text="🚀 1 месяц — $17 (340 ⭐)", callback_data="pay_1month")]
+        [InlineKeyboardButton(text="⚡ 1 день — 50 ⭐", callback_data="pay_1day")],
+        [InlineKeyboardButton(text="🔥 1 неделя — 140 ⭐", callback_data="pay_1week")],
+        [InlineKeyboardButton(text="🚀 1 месяц — 340 ⭐", callback_data="pay_1month")]
     ])
-    await call.message.edit_text("💳 <b>Выберите тарифный план:</b>", reply_markup=keyboard, parse_mode="HTML")
+    await call.message.edit_text("💳 <b>Выберите тарифный план (оплата Telegram Stars ⭐):</b>", reply_markup=keyboard,
+                                 parse_mode="HTML")
+
+
+@router.callback_query(F.data.in_({"pay_1day", "pay_1week", "pay_1month"}))
+async def process_payment_tariff(call: CallbackQuery, bot: Bot):
+    await call.answer()
+    data = call.data
+
+    if data == "pay_1day":
+        title = "Подписка на 1 день"
+        description = "Доступ к рассылке VK на 1 день"
+        payload = "sub_1day"
+        prices = [LabeledPrice(label="XTR", amount=50)]
+    elif data == "pay_1week":
+        title = "Подписка на 1 неделю"
+        description = "Доступ к рассылке VK на 7 дней"
+        payload = "sub_1week"
+        prices = [LabeledPrice(label="XTR", amount=140)]
+    else:
+        title = "Подписка на 1 месяц"
+        description = "Доступ к рассылке VK на 30 дней"
+        payload = "sub_1month"
+        prices = [LabeledPrice(label="XTR", amount=340)]
+
+    await bot.send_invoice(
+        chat_id=call.from_user.id,
+        title=title,
+        description=description,
+        payload=payload,
+        currency="XTR",
+        prices=prices
+    )
+
+
+@router.pre_checkout_query()
+async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
+    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+
+@router.message(F.successful_payment)
+async def successful_payment_handler(message: Message):
+    payload = message.successful_payment.invoice_payload
+    days = 1
+    if "1week" in payload:
+        days = 7
+    elif "1month" in payload:
+        days = 30
+
+    db.set_subscription(message.from_user.id, days)
+    await message.answer(f"✅ <b>Оплата прошла успешно!</b> Подписка продлена на <b>{days}</b> дней. 🎉",
+                         parse_mode="HTML")
 
 
 # --- МЕНЮ УПРАВЛЕНИЯ АККАУНТАМИ ---
 @router.message(F.text.contains("Подключить аккаунты"))
-async def connect_accs_btn(message: Message, state: FSMContext, user_id: int = None):
+async def connect_accs_btn(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
-    if not user_id:
-        user_id = message.from_user.id
+    user_id = message.from_user.id
 
-    if not await is_subscribed(message.bot, user_id):
-        return await send_welcome_menu(message, user_id, message.from_user.first_name, message.from_user.username,
-                                       message.bot)
+    if not await is_subscribed(bot, user_id):
+        return await send_welcome_menu(message, user_id, message.from_user.first_name, message.from_user.username, bot)
 
     if not db.is_sub_active(user_id):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -234,14 +285,14 @@ async def connect_accs_btn(message: Message, state: FSMContext, user_id: int = N
 
 
 @router.callback_query(F.data == "connect_accs_menu")
-async def back_to_accs_menu(call: CallbackQuery, state: FSMContext):
+async def back_to_accs_menu(call: CallbackQuery, state: FSMContext, bot: Bot):
     await call.answer()
-    await connect_accs_btn(call.message, state, user_id=call.from_user.id)
+    await connect_accs_btn(call.message, state, bot)
 
 
 # --- СПИСОК АККАУНТОВ ---
 @router.callback_query(F.data == "vk_accounts_list")
-async def show_vk_accounts_list(call: CallbackQuery, bot: Bot):
+async def show_vk_accounts_list(call: CallbackQuery):
     await call.answer()
     user_id = call.from_user.id
 
