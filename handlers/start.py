@@ -499,7 +499,7 @@ async def admin_give_sub_finish(message: Message, state: FSMContext):
     target_user = data['target_user']
     days = int(message.text)
 
-    db.give_subscription(target_user, days)
+    db.set_subscription(target_user, days)
 
     await state.clear()
     await message.answer(f"✅ Подписка пользователю <code>{target_user}</code> выдана на {days} дней!",
