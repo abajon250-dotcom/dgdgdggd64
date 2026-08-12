@@ -1,6 +1,4 @@
 import asyncio
-import time
-import random
 import aiohttp
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -24,7 +22,7 @@ class VKProlivStates(StatesGroup):
 
 async def check_access(event, user_id: int) -> bool:
     if not db.is_sub_active(user_id):
-        text = "❌ **Доступ ограничен!** Для использования функций необходима активная подписка."
+        text = "❌ **Доступ ограничен!** Требуется подписка."
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💎 Подписка", callback_data="sub_menu")]])
         if isinstance(event, CallbackQuery):
             await event.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
@@ -51,14 +49,13 @@ async def callback_vk_menu(call: CallbackQuery, state: FSMContext):
 async def show_main_menu(message_obj: Message, state: FSMContext, is_edit: bool = False):
     data = await state.get_data()
     acc_count = len(data.get("valid_accounts", []))
-
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Загрузить аккаунты (.txt / текст)", callback_data="vk_upload_accounts")],
         [InlineKeyboardButton(text=f"🚀 Начать рассылку ({acc_count} акк.)", callback_data="vk_start_proliv")],
         [InlineKeyboardButton(text="🗑 Очистить список", callback_data="vk_clear_accounts")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="vk_stats")]
     ])
-    text = f"🤖 **Панель управления VK:**\n\n📦 Рабочих аккаунтов в сессии: **{acc_count} шт.**"
+    text = f"🤖 **Панель управления VK:**\n\n📦 Валидных аккаунтов: **{acc_count} шт.**"
     if is_edit:
         await message_obj.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
     else:
@@ -78,23 +75,15 @@ async def upload_accounts_prompt(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await state.set_state(VKProlivStates.waiting_for_accounts)
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="vk_menu")]])
-    await call.message.edit_text(
-        "📥 **Массовая загрузка аккаунтов:**\n\n"
-        "Отправьте `.txt` файл или текст (каждый с новой строки):\n"
-        "• Токены (`vk1.a...`)\n"
-        "• Логин:пароль (`79991234567:password`)",
-        reply_markup=kb, parse_mode="Markdown"
-    )
+    await call.message.edit_text("📥 Отправьте `.txt` файл или текст с токенами / логин:пароль:", reply_markup=kb,
+                                 parse_mode="Markdown")
 
 
 @router.message(VKProlivStates.waiting_for_accounts)
 async def process_accounts_batch(message: Message, state: FSMContext, bot):
     if not await check_access(message, message.from_user.id): return
-
     lines = []
     if message.document:
-        if not message.document.file_name.endswith(".txt"):
-            return await message.answer("❌ Нужен `.txt` файл.")
         file = await bot.get_file(message.document.file_id)
         lines = (await bot.download_file(file.file_path)).decode("utf-8", errors="ignore").splitlines()
     elif message.text:
@@ -103,7 +92,7 @@ async def process_accounts_batch(message: Message, state: FSMContext, bot):
     lines = [l.strip() for l in lines if l.strip()]
     if not lines: return await message.answer("❌ Список пуст.")
 
-    status_msg = await message.answer(f"⏳ Проверка {len(lines)} аккаунтов через API (с жестким детектором банов)...")
+    status_msg = await message.answer(f"⏳ Проверка {len(lines)} аккаунтов с детектом банов...")
     valid_accounts, invalid_count = [], 0
 
     async with aiohttp.ClientSession() as session:
@@ -125,11 +114,7 @@ async def process_accounts_batch(message: Message, state: FSMContext, bot):
                 if token:
                     res = await check_vk_account(token)
                     if res["valid"]:
-                        valid_accounts.append({
-                            "token": token,
-                            "name": res["name"],
-                            "friends": res["friends"]
-                        })
+                        valid_accounts.append({"token": token, "name": res["name"], "friends": res["friends"]})
                     else:
                         invalid_count += 1
                 else:
@@ -144,13 +129,9 @@ async def process_accounts_batch(message: Message, state: FSMContext, bot):
     await state.set_state(VKProlivStates.waiting_for_message)
 
     await status_msg.edit_text(
-        f"✅ **Проверка завершена!**\n\n"
-        f"🟢 Валидных (активных): **{len(valid_accounts)}**\n"
-        f"🔴 Невалидных / Заблокированных: **{invalid_count}**\n\n"
-        f"💬 Теперь отправьте **текст сообщения** для рассылки:",
+        f"✅ Проверка завершена!\n🟢 Валидных: {len(valid_accounts)}\n🔴 Невалидных / Заблокированных: {invalid_count}\n\n💬 Отправьте текст сообщения:",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="vk_menu")]]),
-        parse_mode="Markdown"
+            inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="vk_menu")]]), parse_mode="Markdown"
     )
 
 
@@ -162,9 +143,8 @@ async def callback_start_proliv(call: CallbackQuery, state: FSMContext):
     if not data.get("valid_accounts"):
         return await call.message.edit_text("❌ Нет доступных аккаунтов!", reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="vk_menu")]]))
-
     await state.set_state(VKProlivStates.waiting_for_message)
-    await call.message.edit_text("💬 Отправьте **текст сообщения** для рассылки:", reply_markup=InlineKeyboardMarkup(
+    await call.message.edit_text("💬 Отправьте текст сообщения:", reply_markup=InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="vk_menu")]]), parse_mode="Markdown")
 
 
@@ -173,10 +153,8 @@ async def get_proliv_text(message: Message, state: FSMContext):
     if not await check_access(message, message.from_user.id): return
     await state.update_data(proliv_text=message.text)
     await state.set_state(VKProlivStates.waiting_for_delay)
-    await message.answer("⏱ Введите **задержку (кд)** в секундах (например: `7` или `5`):",
-                         reply_markup=InlineKeyboardMarkup(
-                             inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="vk_menu")]]),
-                         parse_mode="Markdown")
+    await message.answer("⏱ Введите задержку (кд) в секундах:", reply_markup=InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="vk_menu")]]), parse_mode="Markdown")
 
 
 @router.message(VKProlivStates.waiting_for_delay)
@@ -185,7 +163,7 @@ async def execute_proliv(message: Message, state: FSMContext):
     try:
         delay = float(message.text.replace(",", "."))
     except ValueError:
-        return await message.answer("❌ Введите число (например, 7):")
+        return await message.answer("❌ Введите число:")
 
     data = await state.get_data()
     accounts = data.get("valid_accounts", [])
@@ -196,84 +174,59 @@ async def execute_proliv(message: Message, state: FSMContext):
     active_broadcasts[uid] = True
     progress_msg = await message.answer("🚀 Подготовка к рассылке...")
 
-    recipients = []
     for acc in accounts:
-        friends = await get_vk_friends(acc["token"])
-        for f in friends:
-            if f not in recipients:
-                recipients.append(f)
-
-    total = len(recipients)
-    if total == 0:
-        active_broadcasts.pop(uid, None)
-        return await progress_msg.edit_text("❌ У выбранных аккаунтов не найдено друзей для рассылки!")
-
-    success, errors = 0, 0
-    start_time = time.time()
-    token = accounts[0]["token"]
-
-    for idx, friend_id in enumerate(recipients, 1):
         if not active_broadcasts.get(uid, True): break
+        acc_name = acc["name"]
+        token = acc["token"]
+        friends = await get_vk_friends(token)
+        total_friends = len(friends)
 
-        res = await send_vk_message(token, str(friend_id), text)
-        is_ok = res.get("success", False)
-        if is_ok:
-            success += 1
-        else:
-            errors += 1
+        if total_friends == 0: continue
 
-        elapsed = time.time() - start_time
-        speed = round((idx / (elapsed / 60)) if elapsed > 0 else 0.0, 1)
-        remaining_items = total - idx
-        eta_min = round((remaining_items * delay) / 60, 1)
-        progress_pct = round((idx / total) * 100, 1)
+        success, errors = 0, 0
+        for idx, friend_id in enumerate(friends, 1):
+            if not active_broadcasts.get(uid, True): break
 
-        # Вывод прогресса ровно в вашем формате
-        status_text = (
-            f"📤 **VK рассылка в процессе**\n\n"
-            f"👥 Всего: {total}\n"
-            f"✅ Отправлено: {success}\n"
-            f"📭 Осталось: {remaining_items}\n"
-            f"📊 Прогресс: {progress_pct}%\n"
-            f"⚡ Скорость: {speed} сообщ/мин\n"
-            f"⏳ Осталось времени: {eta_min} мин\n"
-            f"🕒 Задержка: {delay} сек\n\n"
-            f"🔄 ID `{friend_id}` — {'✅ Успешно' if is_ok else '❌ Ошибка'}"
-        )
+            res = await send_vk_message(token, str(friend_id), text)
+            if res.get("success", False):
+                success += 1
+            else:
+                errors += 1
 
-        try:
-            await progress_msg.edit_text(
-                status_text,
-                reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[[InlineKeyboardButton(text="🛑 Стоп", callback_data="cancel_br")]]),
-                parse_mode="Markdown"
+            status_text = (
+                f"📤 **Рассылка с аккаунта «{acc_name}»**\n\n"
+                f"👥 Всего: {total_friends}\n"
+                f"✅ Отправлено: {success}\n"
+                f"🔴 Ошибок: {errors}\n"
+                f"📊 Прогресс: {round((idx / total_friends) * 100, 1)}%\n"
+                f"🔄 ID `{friend_id}` — {'✅ Успешно' if res.get('success') else '❌ Ошибка'}"
             )
-        except Exception:
-            pass
+            try:
+                await progress_msg.edit_text(status_text, reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[[InlineKeyboardButton(text="🛑 Стоп", callback_data="cancel_br")]]),
+                                             parse_mode="Markdown")
+            except Exception:
+                pass
+            await asyncio.sleep(delay)
 
-        await asyncio.sleep(delay)
+        # ВОЗВРАЩЕН ВАШ ТОЧНЫЙ ФОРМАТ ОКОНЧАНИЯ РАССЫЛКИ С АККАУНТА
+        completion_text = (
+            f"✅ Рассылка с аккаунта «{acc_name}» завершена!\n\n"
+            f"📤 Успешно отправлено: {success}\n"
+            f"🔴 Ошибок отправки: {errors}\n"
+            f"📊 Обработано друзей: {total_friends} из {total_friends}"
+        )
+        await message.answer(completion_text, parse_mode="Markdown")
 
     active_broadcasts.pop(uid, None)
-    total_elapsed = int(time.time() - start_time)
-    hrs = total_elapsed // 3600
-    mins = (total_elapsed % 3600) // 60
-    secs = total_elapsed % 60
-
-    # Экран завершения ровно по вашему шаблону
-    completion_text = (
-        f"✅ **Рассылка VK завершена**\n"
-        f"📊 Отправлено: {success} из {total}\n"
-        f"👥 Друзей: {total}, Бесед: 0\n"
-        f"⏱️ Затрачено: {hrs:02d} ч {mins:02d} мин {secs:02d} сек"
-    )
-    await progress_msg.edit_text(completion_text, reply_markup=InlineKeyboardMarkup(
+    await message.answer("🎉 **Все рассылки завершены!**", reply_markup=InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="🔙 В меню VK", callback_data="vk_menu")]]), parse_mode="Markdown")
 
 
 @router.callback_query(F.data == "cancel_br")
 async def cancel_br(call: CallbackQuery):
     active_broadcasts[call.from_user.id] = False
-    await call.answer("🛑 Рассылка остановлена пользователем!", show_alert=True)
+    await call.answer("🛑 Рассылка остановлена!", show_alert=True)
 
 
 @router.callback_query(F.data == "vk_stats")
@@ -284,12 +237,7 @@ async def vk_stats_action(call: CallbackQuery, state: FSMContext):
     acc_count = len(data.get("valid_accounts", []))
     sub_end = db.get_sub_end_date(call.from_user.id)
     sub_str = sub_end.strftime("%d.%m.%Y %H:%M") if sub_end else "Нет"
-
     await call.message.edit_text(
-        f"📊 **Статистика VK модуля:**\n\n"
-        f"⏳ Подписка до: **{sub_str}**\n"
-        f"📦 Валидных аккаунтов: **{acc_count}**",
+        f"📊 **Статистика:**\n\n⏳ Подписка до: **{sub_str}**\n📦 Валидных аккаунтов: **{acc_count}**",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="vk_menu")]]),
-        parse_mode="Markdown"
-    )
+            inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="vk_menu")]]), parse_mode="Markdown")
