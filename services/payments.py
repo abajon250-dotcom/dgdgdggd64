@@ -81,19 +81,16 @@ async def check_cryptobot_invoice(invoice_id: int) -> bool:
 # ==========================================
 
 async def create_xrocket_invoice(amount_usdt: float, description: str, payload: str):
-    """
-    Создание инвойса через XRocket Pay API.
-    Возвращает прямую ссылку на оплату (pay_url) или None при ошибке.
-    """
-    if not XROCKET_TOKEN:
-        logger.error("❌ XROCKET_TOKEN не задан в .env файле!")
+    token = os.getenv("XROCKET_TOKEN")
+    if not token:
+        logger.error("❌ XROCKET_TOKEN не найден в .env!")
         return None
 
-    url = "https://pay.xrocket.tg/invoice/create"
+    # Пытаемся использовать корректный путь API
+    url = "https://pay.xrocket.tg/api/create"
 
-    # Заголовок авторизации XRocket
     headers = {
-        "Rocket-Pay-Key": XROCKET_TOKEN,
+        "Rocket-Pay-Key": token,
         "Content-Type": "application/json"
     }
 
@@ -106,29 +103,20 @@ async def create_xrocket_invoice(amount_usdt: float, description: str, payload: 
 
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.post(url, headers=headers, json=data, timeout=15) as resp:
-                raw_text = await resp.text()
-                logger.debug(f"XRocket сырой ответ [Status {resp.status}]: {raw_text}")
+            # Увеличил таймаут на случай тормозов API
+            async with session.post(url, headers=headers, json=data, timeout=20) as resp:
+                status = resp.status
+                raw_resp = await resp.text()
 
-                try:
-                    res = await resp.json() if raw_text else {}
-                except Exception:
-                    res = {}
-
-                # Проверяем успешность ответа от XRocket по разным возможным ключам структуры
-                if resp.status == 200 and (res.get("success") or res.get("ok") or res.get("data")):
-                    resp_data = res.get("data")
-                    if isinstance(resp_data, dict):
-                        link = resp_data.get("link") or resp_data.get("pay_url")
-                        if link:
-                            return link
-                    elif isinstance(res.get("link"), str):
-                        return res.get("link")
-
-                logger.error(f"❌ XRocket API отклонил запрос. Ответ сервера: {raw_text}")
+                if status == 200:
+                    res = await resp.json()
+                    # XRocket обычно возвращает данные в поле 'data'
+                    return res.get("data", {}).get("link")
+                else:
+                    logger.error(f"❌ XRocket API ответил ошибкой {status}: {raw_resp}")
+                    return None
         except Exception as e:
-            logger.exception(f"❌ XRocket ошибка соединения: {e}")
-
+            logger.exception(f"❌ Ошибка соединения с XRocket: {e}")
     return None
 
 
