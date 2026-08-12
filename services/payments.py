@@ -1,149 +1,63 @@
-import os
 import aiohttp
-from aiogram import Bot
-from aiogram.types import LabeledPrice
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
-# Обновленные тарифы и цены
+router = Router()
+
+# Цены подписок (дни: стоимость в USDT)
 PRICES = {
-    "1day": {
-        "title": "⚡ 1 день",
-        "usd": 2.5,
-        "stars": 50,
-        "days": 1
-    },
-    "1week": {
-        "title": "🔥 1 неделя",
-        "usd": 7.0,
-        "stars": 140,
-        "days": 7
-    },
-    "1month": {
-        "title": "🚀 1 месяц",
-        "usd": 17.0,
-        "stars": 340,
-        "days": 30
-    }
+    1: 2.0,
+    7: 10.0,
+    30: 30.0
 }
 
-CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
-XROCKET_TOKEN = os.getenv("XROCKET_TOKEN", "")
+# Вставьте ваш токен от @CryptoBot (получить у @CryptoBot -> Pay)
+CRYPTO_BOT_TOKEN = "ВАШ_ТОКЕН_CRYPTO_BOT"
 
 
-async def create_stars_invoice(bot: Bot, user_id: int, plan: str) -> str:
-    plan_info = PRICES[plan]
-    prices = [LabeledPrice(label=f"Подписка: {plan_info['title']}", amount=plan_info["stars"])]
-
-    title = f"Подписка на бота ({plan_info['title']})"
-    description = f"Доступ к системе автоматизации VK на {plan_info['title']}"
-    payload = f"sub_{plan}"
-    currency = "XTR"
-
-    link = await bot.create_invoice_link(
-        title=title,
-        description=description,
-        payload=payload,
-        provider_token="",
-        currency=currency,
-        prices=prices
-    )
-    return link
+@router.message(F.text == "💎 Подписка")
+async def sub_menu(message: Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"📅 {days} дней — {price}$", callback_data=f"buy_sub_{days}")]
+        for days, price in PRICES.items()
+    ])
+    await message.answer("🛒 **Выберите срок подписки для оплаты через CryptoBot:**", reply_markup=kb,
+                         parse_mode="Markdown")
 
 
-async def create_cryptobot_invoice(user_id: int, plan: str):
-    plan_info = PRICES[plan]
-    amount = plan_info["usd"]
-
-    if not CRYPTOBOT_TOKEN:
-        return None, None
+@router.callback_query(F.data.startswith("buy_sub_"))
+async def create_invoice(call: CallbackQuery):
+    days = int(call.data.split("_")[2])
+    amount = PRICES[days]
 
     url = "https://pay.crypt.bot/api/createInvoice"
-    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
-    data = {
+    headers = {"Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN}
+    payload = {
         "asset": "USDT",
         "amount": str(amount),
-        "description": f"Подписка на бота: {plan_info['title']}",
-        "payload": f"user_{user_id}_plan_{plan}"
+        "description": f"Подписка Zenith VK на {days} дней"
     }
 
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(url, headers=headers, json=data) as response:
-                if response.status == 200:
-                    res = await response.json()
-                    if res.get("ok"):
-                        result = res["result"]
-                        return result.get("pay_url"), result.get("invoice_id")
-        except Exception:
-            pass
-    return None, None
-
-
-async def check_cryptobot_invoice(invoice_id: str) -> bool:
-    if not CRYPTOBOT_TOKEN:
-        return False
-
-    url = "https://pay.crypt.bot/api/getInvoices"
-    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
-    params = {"invoice_ids": invoice_id}
-
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, headers=headers, params=params) as response:
-                if response.status == 200:
-                    res = await response.json()
-                    if res.get("ok"):
-                        items = res["result"].get("items", [])
-                        if items:
-                            return items[0].get("status") == "paid"
-        except Exception:
-            pass
-    return False
-
-
-async def create_xrocket_invoice(user_id: int, plan: str):
-    plan_info = PRICES[plan]
-    amount = plan_info["usd"]
-
-    if not XROCKET_TOKEN:
-        return None, None
-
-    url = "https://pay.xrocket.tg/invoice"
-    headers = {"Rocket-Pay-Key": XROCKET_TOKEN}
-    data = {
-        "amount": amount,
-        "currency": "USDT",
-        "description": f"Подписка: {plan_info['title']}",
-        "payload": f"user_{user_id}_plan_{plan}"
-    }
-
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(url, headers=headers, json=data) as response:
-                if response.status == 200:
-                    res = await response.json()
-                    if isinstance(res, dict):
-                        data_res = res.get("data", res)
-                        return data_res.get("link") or data_res.get("payUrl"), data_res.get("id") or data_res.get(
-                            "invoiceId")
-        except Exception:
-            pass
-    return None, None
-
-
-async def check_xrocket_invoice(invoice_id: str) -> bool:
-    if not XROCKET_TOKEN:
-        return False
-
-    url = f"https://pay.xrocket.tg/invoice/{invoice_id}"
-    headers = {"Rocket-Pay-Key": XROCKET_TOKEN}
-
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, headers=headers) as response:
-                if response.status == 200:
-                    res = await response.json()
-                    status = res.get("status") or res.get("data", {}).get("status")
-                    return status in ("paid", "completed")
-        except Exception:
-            pass
-    return False
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as resp:
+                data = await resp.json()
+                if data.get("ok"):
+                    pay_url = data["result"]["pay_url"]
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="💳 Оплатить счет", url=pay_url)],
+                        [InlineKeyboardButton(text="🔄 Проверить оплату",
+                                              callback_data=f"check_pay_{data['result']['invoice_id']}")]
+                    ])
+                    await call.message.edit_text(
+                        f"✅ **Инвойс успешно создан!**\n\n"
+                        f"📦 Срок: **{days} дн.**\n"
+                        f"💵 Сумма: **{amount} USDT**\n\n"
+                        f"Нажмите кнопку ниже для быстрой оплаты:",
+                        reply_markup=kb,
+                        parse_mode="Markdown"
+                    )
+                else:
+                    await call.answer("❌ Ошибка при создании инвойса в CryptoBot.", show_alert=True)
+    except Exception as e:
+        await call.answer(f"❌ Ошибка соединения: {str(e)[:50]}", show_alert=True)

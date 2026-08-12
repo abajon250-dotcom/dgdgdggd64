@@ -23,6 +23,9 @@ router = Router()
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 
+# Словарь для отслеживания активных рассылок (для возможности отмены)
+active_broadcasts = {}
+
 
 # --- СОСТОЯНИЯ (FSM) ---
 class VKUploadState(StatesGroup):
@@ -30,6 +33,7 @@ class VKUploadState(StatesGroup):
 
 
 class BroadcastState(StatesGroup):
+    selecting_account = State()
     waiting_for_message = State()
 
 
@@ -47,13 +51,13 @@ class AdminBroadcastState(StatesGroup):
 
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
-def make_progress_bar(current: int, total: int, length: int = 10) -> str:
+def make_progress_bar(current: int, total: int, length: int = 12) -> str:
     if total <= 0:
-        return "[░░░░░░░░░░] 0%"
+        return "[░░░░░░░░░░░░] 0%"
     filled = int(length * current / total)
     bar = "▓" * filled + "░" * (length - filled)
     percent = int(current / total * 100)
-    return f"[{bar}] {percent}% ({current}/{total})"
+    return f"[{bar}] {percent}%"
 
 
 async def is_subscribed(bot: Bot, user_id: int) -> bool:
@@ -160,7 +164,7 @@ async def profile_btn(message: Message, state: FSMContext, bot: Bot):
     )
 
 
-# --- ПОДПИСКА И ОПЛАТА (Stars, CryptoBot, XRocket) ---
+# --- ПОДПИСКА И ОПЛАТА ---
 @router.message(F.text.contains("Подписка"))
 async def subscription_btn(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
@@ -249,12 +253,8 @@ async def pay_cryptobot_handler(call: CallbackQuery):
         [InlineKeyboardButton(text="🔗 Оплатить через CryptoBot", url="https://t.me/CryptoBot")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_sub")]
     ])
-    await call.message.edit_text(
-        "🤖 <b>Оплата через CryptoBot</b>\n\n"
-        "Нажмите кнопку ниже для перевода средств и получения подписки:",
-        reply_markup=keyboard,
-        parse_mode="HTML"
-    )
+    await call.message.edit_text("🤖 <b>Оплата через CryptoBot</b>\n\nНажмите кнопку ниже для перехода к оплате:",
+                                 reply_markup=keyboard, parse_mode="HTML")
 
 
 @router.callback_query(F.data == "pay_xrocket")
@@ -264,12 +264,8 @@ async def pay_xrocket_handler(call: CallbackQuery):
         [InlineKeyboardButton(text="🚀 Оплатить через XRocket", url="https://t.me/xrocket")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_sub")]
     ])
-    await call.message.edit_text(
-        "🚀 <b>Оплата через XRocket</b>\n\n"
-        "Нажмите кнопку ниже для перехода к оплате:",
-        reply_markup=keyboard,
-        parse_mode="HTML"
-    )
+    await call.message.edit_text("🚀 <b>Оплата через XRocket</b>\n\nНажмите кнопку ниже для перехода к оплате:",
+                                 reply_markup=keyboard, parse_mode="HTML")
 
 
 @router.pre_checkout_query()
@@ -304,17 +300,15 @@ async def connect_accs_btn(message: Message, state: FSMContext, bot: Bot):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💳 Купить подписку", callback_data="back_to_sub")]
         ])
-        return await message.answer(
-            f"❌ <b>Для подключения аккаунтов необходима активная подписка!</b>",
-            reply_markup=keyboard,
-            parse_mode="HTML"
-        )
+        return await message.answer(f"❌ <b>Для подключения аккаунтов необходима активная подписка!</b>",
+                                    reply_markup=keyboard, parse_mode="HTML")
 
     stats = db.get_vk_accounts_stats(user_id)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Загрузить аккаунты (.txt / текст)", callback_data="vk_add_bulk")],
         [InlineKeyboardButton(text="📂 Мои аккаунты VK", callback_data="vk_accounts_list")],
+        [InlineKeyboardButton(text="🔄 Проверить валидность всех", callback_data="vk_check_all_validity")],
         [InlineKeyboardButton(text="❌ Очистить все аккаунты", callback_data="vk_clear_all")]
     ])
 
@@ -336,7 +330,7 @@ async def back_to_accs_menu(call: CallbackQuery, state: FSMContext, bot: Bot):
     await connect_accs_btn(call.message, state, bot)
 
 
-# --- СПИСОК АККАУНТОВ ---
+# --- СПИСОК И ПРОВЕРКА ВАЛИДНОСТИ АККАУНТОВ ---
 @router.callback_query(F.data == "vk_accounts_list")
 async def show_vk_accounts_list(call: CallbackQuery):
     await call.answer()
@@ -352,7 +346,6 @@ async def show_vk_accounts_list(call: CallbackQuery):
                                             parse_mode="HTML")
 
     text = f"📂 <b>Ваши аккаунты VK ({len(accounts)} шт.):</b>\n\n"
-
     for acc in accounts[:15]:
         full_name = acc.get('name', 'Неизвестно')
         friends = acc.get('friends', 0)
@@ -362,6 +355,7 @@ async def show_vk_accounts_list(call: CallbackQuery):
         text += f"{status} <b>{full_name}</b>\n👥 Друзей: <code>{friends}</code>\n-------------------\n"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Проверить валидность", callback_data="vk_check_all_validity")],
         [InlineKeyboardButton(text="➕ Загрузить еще", callback_data="vk_add_bulk")],
         [InlineKeyboardButton(text="❌ Очистить все", callback_data="vk_clear_all")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="connect_accs_menu")]
@@ -369,7 +363,49 @@ async def show_vk_accounts_list(call: CallbackQuery):
     await call.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
-# --- МАССОВАЯ ЗАГРУЗКА АККАУНТОВ С ПРОГРЕСС-БАРОМ ---
+@router.callback_query(F.data == "vk_check_all_validity")
+async def check_all_accounts_validity(call: CallbackQuery):
+    await call.answer("🔄 Запущена проверка валидности аккаунтов...", show_alert=False)
+    user_id = call.from_user.id
+    accounts = db.get_user_vk_accounts(user_id)
+
+    if not accounts:
+        return await call.message.edit_text("❌ Нет аккаунтов для проверки.")
+
+    status_msg = await call.message.edit_text(f"⏳ <b>Проверка валидности {len(accounts)} аккаунтов...</b>",
+                                              parse_mode="HTML")
+
+    # Очищаем старые и перезаписываем с актуальным статусом
+    db.clear_user_vk_accounts(user_id)
+
+    valid_count = 0
+    invalid_count = 0
+
+    for acc in accounts:
+        token = acc.get('token')
+        acc_info = await check_vk_account(token)
+        if acc_info['valid']:
+            valid_count += 1
+            db.save_vk_account(user_id, token, acc_info['name'], acc_info['friends'])
+        else:
+            invalid_count += 1
+            # Сохраняем невалидный с флагом или пропустим/сохраним с 0 друзей
+            db.save_vk_account(user_id, token, acc.get('name', 'Неизвестно'), 0, is_valid=False)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📂 К списку аккаунтов", callback_data="vk_accounts_list")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="connect_accs_menu")]
+    ])
+    await status_msg.edit_text(
+        f"✅ <b>Проверка завершена!</b>\n\n"
+        f"🟢 Рабочих (валид): <b>{valid_count}</b>\n"
+        f"🔴 Невалидных: <b>{invalid_count}</b>",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+
+# --- МАССОВАЯ ЗАГРУЗКА АККАУНТОВ ---
 @router.callback_query(F.data == "vk_add_bulk")
 async def start_add_bulk(call: CallbackQuery, state: FSMContext):
     await call.answer()
@@ -381,10 +417,7 @@ async def start_add_bulk(call: CallbackQuery, state: FSMContext):
 
     await call.message.edit_text(
         "📥 <b>Загрузка VK аккаунтов</b>\n\n"
-        "Отправьте сюда <b>.txt файл</b> с аккаунтами или отправьте их <b>текстом</b> (каждый с новой строки).\n\n"
-        "📌 <i>Формат строк:</i>\n"
-        "• <code>токен</code>\n"
-        "• <code>логин:пароль:токен</code>",
+        "Отправьте сюда <b>.txt файл</b> с токенами или отправьте их <b>текстом</b> (каждый с новой строки).",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -419,20 +452,23 @@ async def process_accounts_input(message: Message, state: FSMContext, bot: Bot):
     report_lines = []
 
     for idx, raw_acc in enumerate(raw_accounts, 1):
-        acc_info = await check_vk_account(raw_acc)
+        # Если строка содержит логин:пароль:токен или что-то подобное, берем последнюю часть как токен или саму строку
+        token = raw_acc.split(":")[-1].strip() if ":" in raw_acc else raw_acc
+
+        acc_info = await check_vk_account(token)
 
         if acc_info['valid']:
             valid_added += 1
             db.save_vk_account(
                 user_id=message.from_user.id,
-                token=acc_info['token'],
+                token=token,
                 name=acc_info['name'],
-                friends=acc_info['friends']
+                friends=acc_info['friends'],
+                is_valid=True
             )
             report_lines.append(f"🟢 <b>{acc_info['name']}</b> | Друзей: {acc_info['friends']}")
         else:
             invalid_count += 1
-            report_lines.append("🔴 Невалидный аккаунт")
 
         if idx % 3 == 0 or idx == total:
             current_bar = make_progress_bar(idx, total)
@@ -447,7 +483,7 @@ async def process_accounts_input(message: Message, state: FSMContext, bot: Bot):
         [InlineKeyboardButton(text="📂 Список аккаунтов", callback_data="vk_accounts_list")]
     ])
 
-    report_text = "\n".join(report_lines[:15])
+    report_text = "\n".join(report_lines[:15]) if report_lines else "Нет успешных аккаунтов"
     await status_msg.edit_text(
         f"✅ <b>Обработка завершена!</b>\n\n"
         f"🟢 Валидных добавлено: <b>{valid_added}</b>\n"
@@ -471,7 +507,7 @@ async def clear_all_accs(call: CallbackQuery):
                                  parse_mode="HTML")
 
 
-# --- РАССЫЛКА ПО ДРУЗЬЯМ VK С ПРОГРЕСС-БАРОМ ---
+# --- ВЫБОР АККАУНТА И РАССЫЛКА ПО ДРУЗЬЯМ С ОТМЕНОЙ ---
 @router.message(F.text.contains("Начать рассылку"))
 async def start_broadcast_btn(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
@@ -492,21 +528,72 @@ async def start_broadcast_btn(message: Message, state: FSMContext, bot: Bot):
 
     if not valid_accs:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Проверить аккаунты", callback_data="vk_check_all_validity")],
             [InlineKeyboardButton(text="🔑 Подключить аккаунты", callback_data="vk_add_bulk")]
         ])
-        return await message.answer("⚠️ <b>У вас нет рабочих VK аккаунтов!</b>\nСначала добавьте их.",
-                                    reply_markup=keyboard, parse_mode="HTML")
+        return await message.answer(
+            "⚠️ <b>У вас нет рабочих (валидных) VK аккаунтов!</b>\nПроверьте или добавьте новые.",
+            reply_markup=keyboard, parse_mode="HTML")
 
+    buttons = []
+    for idx, acc in enumerate(valid_accs):
+        acc_name = acc.get('name', 'Аккаунт')
+        friends_count = acc.get('friends', 0)
+        buttons.append(
+            [InlineKeyboardButton(text=f"🟢 {acc_name} ({friends_count} друзей)", callback_data=f"vk_sel_{idx}")])
+
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="connect_accs_menu")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await state.set_state(BroadcastState.selecting_account)
+    await state.update_data(valid_accs=valid_accs)
+
+    await message.answer(
+        f"🚀 <b>Запуск рассылки по друзьям VK</b>\n\n"
+        f"👥 Выберите аккаунт, с которого хотите запустить рассылку:",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(BroadcastState.selecting_account, F.data.startswith("vk_sel_"))
+async def process_account_selection(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    try:
+        idx = int(call.data.split("_")[2])
+    except Exception:
+        return
+
+    data = await state.get_data()
+    valid_accs = data.get("valid_accs", [])
+
+    if idx >= len(valid_accs):
+        return await call.message.edit_text("❌ Ошибка выбора аккаунта. Попробуйте снова.")
+
+    selected_acc = valid_accs[idx]
+
+    # Автоматическая финальная проверка валидности токена перед вводом текста
+    check_res = await check_vk_account(selected_acc['token'])
+    if not check_res['valid']:
+        return await call.message.edit_text(
+            f"❌ <b>Аккаунт {selected_acc.get('name')} больше недействителен (токен отозван или истек)!</b>\n"
+            f"Пожалуйста, обновите список или выберите другой аккаунт.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="connect_accs_menu")]]),
+            parse_mode="HTML"
+        )
+
+    await state.update_data(token=selected_acc['token'], acc_name=check_res['name'])
     await state.set_state(BroadcastState.waiting_for_message)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data="connect_accs_menu")]
     ])
 
-    await message.answer(
-        f"🚀 <b>Запуск рассылки по друзьям VK</b>\n\n"
-        f"✅ Готово аккаунтов к работе: <b>{len(valid_accs)}</b>\n\n"
-        f"💬 Отправьте <b>текст сообщения</b> для рассылки друзьям со всех аккаунтов:",
+    await call.message.edit_text(
+        f"🚀 Выбран аккаунт: <b>{check_res['name']}</b>\n"
+        f"👥 Друзей для рассылки: <b>{check_res['friends']}</b>\n\n"
+        f"💬 Отправьте <b>текст сообщения</b>, который будет разослан друзьям этого аккаунта:",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -515,45 +602,62 @@ async def start_broadcast_btn(message: Message, state: FSMContext, bot: Bot):
 @router.message(BroadcastState.waiting_for_message, F.text)
 async def process_broadcast_execution(message: Message, state: FSMContext):
     broadcast_text = message.text
+    data = await state.get_data()
+    token = data.get('token')
+    acc_name = data.get('acc_name', 'Аккаунт')
+    user_id = message.from_user.id
+
     await state.clear()
 
-    user_id = message.from_user.id
-    accounts = db.get_user_vk_accounts(user_id)
-    valid_accs = [a for a in accounts if a.get('is_valid', True)]
+    if not token:
+        return await message.answer("❌ Ошибка: токен аккаунта не найден.")
 
-    status_msg = await message.answer("🚀 <b>Сбор списка друзей и подготовка рассылки...</b>", parse_mode="HTML")
+    # Включаем флаг активности рассылки
+    active_broadcasts[user_id] = True
 
-    # Собираем всех получателей со всех аккаунтов
-    tasks_pool = []
-    for acc in valid_accs:
-        token = acc['token']
-        friend_ids = await get_vk_friends(token)
-        if friend_ids:
-            for fid in friend_ids:
-                tasks_pool.append((token, fid))
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🛑 Отменить рассылку", callback_data="cancel_broadcast")]
+    ])
 
-    total_targets = len(tasks_pool)
+    status_msg = await message.answer(
+        f"🚀 <b>Сбор друзей для аккаунта «{acc_name}»...</b>",
+        reply_markup=cancel_kb,
+        parse_mode="HTML"
+    )
+
+    friend_ids = await get_vk_friends(token)
+    total_targets = len(friend_ids)
+
     if total_targets == 0:
-        return await status_msg.edit_text("❌ <b>Не найдено друзей ни на одном из подключенных аккаунтов!</b>",
+        active_broadcasts.pop(user_id, None)
+        return await status_msg.edit_text(f"❌ У аккаунта <b>{acc_name}</b> не найдено друзей для рассылки!",
                                           parse_mode="HTML")
 
     total_success = 0
     total_errors = 0
 
-    for idx, (token, fid) in enumerate(tasks_pool, 1):
+    for idx, fid in enumerate(friend_ids, 1):
+        # Проверяем, не нажал ли пользователь кнопку отмены
+        if not active_broadcasts.get(user_id, True):
+            break
+
         res = await send_vk_message(token=token, target=str(fid), text=broadcast_text)
         if res.get("success"):
             total_success += 1
         else:
             total_errors += 1
 
-        if idx % 3 == 0 or idx == total_targets:
+        # Обновляем прогресс-бар каждые 2 сообщения или на последнем
+        if idx % 2 == 0 or idx == total_targets:
             bar = make_progress_bar(idx, total_targets)
             try:
                 await status_msg.edit_text(
-                    f"🚀 <b>Рассылка по друзьям идет...</b>\n"
-                    f"{bar}\n"
-                    f"📤 Успешно: {total_success} | 🔴 Ошибок: {total_errors}",
+                    f"🚀 <b>Рассылка с аккаунта: {acc_name}</b>\n\n"
+                    f"{bar}\n\n"
+                    f"📤 Успешно: <b>{total_success}</b>\n"
+                    f"🔴 Ошибок: <b>{total_errors}</b>\n"
+                    f"⏳ Прогресс: {idx} / {total_targets}",
+                    reply_markup=cancel_kb,
                     parse_mode="HTML"
                 )
             except Exception:
@@ -561,12 +665,25 @@ async def process_broadcast_execution(message: Message, state: FSMContext):
 
         await asyncio.sleep(1.2)
 
+    active_broadcasts.pop(user_id, None)
+
+    cancelled = not active_broadcasts.get(user_id, True)
+    title_status = "🛑 <b>Рассылка отменена пользователем!</b>" if cancelled else f"✅ <b>Рассылка с аккаунта «{acc_name}» завершена!</b>"
+
     await status_msg.edit_text(
-        f"✅ <b>Рассылка по друзьям завершена!</b>\n\n"
+        f"{title_status}\n\n"
         f"📤 Успешно отправлено: <b>{total_success}</b>\n"
-        f"🔴 Ошибок отправки: <b>{total_errors}</b>",
+        f"🔴 Ошибок отправки: <b>{total_errors}</b>\n"
+        f"📊 Обработано друзей: {total_success + total_errors} из {total_targets}",
         parse_mode="HTML"
     )
+
+
+@router.callback_query(F.data == "cancel_broadcast")
+async def cancel_broadcast_callback(call: CallbackQuery):
+    user_id = call.from_user.id
+    active_broadcasts[user_id] = False
+    await call.answer("🛑 Запрос на отмену принят. Рассылка остановится после текущего сообщения...", show_alert=True)
 
 
 # --- АДМИН-ПАНЕЛЬ ---
@@ -612,7 +729,6 @@ async def admin_give_sub_finish(message: Message, state: FSMContext):
     days = int(message.text)
 
     db.set_subscription(target_user, days)
-
     await state.clear()
     await message.answer(f"✅ Подписка пользователю <code>{target_user}</code> выдана на {days} дней!",
                          parse_mode="HTML")
