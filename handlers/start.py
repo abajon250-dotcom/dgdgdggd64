@@ -16,7 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 
 import db
-from services.vk_service import check_vk_account, send_vk_message
+from services.vk_service import check_vk_account, send_vk_message, get_vk_friends
 
 router = Router()
 
@@ -30,7 +30,6 @@ class VKUploadState(StatesGroup):
 
 
 class BroadcastState(StatesGroup):
-    waiting_for_target = State()
     waiting_for_message = State()
 
 
@@ -152,7 +151,7 @@ async def profile_btn(message: Message, state: FSMContext, bot: Bot):
     )
 
 
-# --- ПОДПИСКА И ОПЛАТА ---
+# --- ПОДПИСКА И ОПЛАТА (Telegram Stars, CryptoBot, XRocket) ---
 @router.message(F.text.contains("Подписка"))
 async def subscription_btn(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
@@ -170,28 +169,37 @@ async def subscription_btn(message: Message, state: FSMContext, bot: Bot):
         sub_status = "🔴 <b>Отсутствует или истекла</b>"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Выбрать тариф и продлить", callback_data="buy_subscription")]
+        [InlineKeyboardButton(text="⭐ Оплатить Telegram Stars", callback_data="pay_stars_menu")],
+        [InlineKeyboardButton(text="🤖 CryptoBot", callback_data="pay_cryptobot")],
+        [InlineKeyboardButton(text="🚀 XRocket", callback_data="pay_xrocket")]
     ])
 
     await message.answer(
         f"💳 <b>Управление подпиской</b>\n\n"
         f"⏳ Текущий статус: {sub_status}\n\n"
-        f"Нажмите кнопку ниже для оплаты:",
+        f"Выберите удобный способ оплаты:",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
 
 
-@router.callback_query(F.data == "buy_subscription")
-async def show_tariffs(call: CallbackQuery):
+@router.callback_query(F.data == "pay_stars_menu")
+async def show_stars_tariffs(call: CallbackQuery):
     await call.answer()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚡ 1 день — 50 ⭐", callback_data="pay_1day")],
         [InlineKeyboardButton(text="🔥 1 неделя — 140 ⭐", callback_data="pay_1week")],
-        [InlineKeyboardButton(text="🚀 1 месяц — 340 ⭐", callback_data="pay_1month")]
+        [InlineKeyboardButton(text="🚀 1 месяц — 340 ⭐", callback_data="pay_1month")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_sub")]
     ])
-    await call.message.edit_text("💳 <b>Выберите тарифный план (оплата Telegram Stars ⭐):</b>", reply_markup=keyboard,
+    await call.message.edit_text("💳 <b>Выберите тарифный план (Telegram Stars):</b>", reply_markup=keyboard,
                                  parse_mode="HTML")
+
+
+@router.callback_query(F.data == "back_to_sub")
+async def back_to_subscription(call: CallbackQuery, state: FSMContext, bot: Bot):
+    await call.answer()
+    await subscription_btn(call.message, state, bot)
 
 
 @router.callback_query(F.data.in_({"pay_1day", "pay_1week", "pay_1month"}))
@@ -225,6 +233,37 @@ async def process_payment_tariff(call: CallbackQuery, bot: Bot):
     )
 
 
+@router.callback_query(F.data == "pay_cryptobot")
+async def pay_cryptobot_handler(call: CallbackQuery):
+    await call.answer()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔗 Оплатить через CryptoBot", url="https://t.me/CryptoBot")],
+        # Ссылка на бота оплаты или ваш инвойс
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_sub")]
+    ])
+    await call.message.edit_text(
+        "🤖 <b>Оплата через CryptoBot</b>\n\n"
+        "Нажмите кнопку ниже для перехода к оплате подписки в CryptoBot:",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data == "pay_xrocket")
+async def pay_xrocket_handler(call: CallbackQuery):
+    await call.answer()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Оплатить через XRocket", url="https://t.me/xrocket")],  # Ссылка на XRocket
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_sub")]
+    ])
+    await call.message.edit_text(
+        "🚀 <b>Оплата через XRocket</b>\n\n"
+        "Нажмите кнопку ниже для перехода к оплате подписки в XRocket:",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+
 @router.pre_checkout_query()
 async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery, bot: Bot):
     await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
@@ -255,7 +294,7 @@ async def connect_accs_btn(message: Message, state: FSMContext, bot: Bot):
 
     if not db.is_sub_active(user_id):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Купить подписку", callback_data="buy_subscription")]
+            [InlineKeyboardButton(text="💳 Купить подписку", callback_data="back_to_sub")]
         ])
         return await message.answer(
             f"❌ <b>Для подключения аккаунтов необходима активная подписка!</b>\n\n"
@@ -424,7 +463,7 @@ async def clear_all_accs(call: CallbackQuery):
                                  parse_mode="HTML")
 
 
-# --- РАССЫЛКА VK ---
+# --- РАССЫЛКА ПО ДРУЗЬЯМ VK ---
 @router.message(F.text.contains("Начать рассылку"))
 async def start_broadcast_btn(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
@@ -435,7 +474,7 @@ async def start_broadcast_btn(message: Message, state: FSMContext, bot: Bot):
 
     if not db.is_sub_active(user_id):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Купить подписку", callback_data="buy_subscription")]
+            [InlineKeyboardButton(text="💳 Купить подписку", callback_data="back_to_sub")]
         ])
         return await message.answer("❌ <b>Для запуска рассылки необходима активная подписка!</b>",
                                     reply_markup=keyboard, parse_mode="HTML")
@@ -450,32 +489,23 @@ async def start_broadcast_btn(message: Message, state: FSMContext, bot: Bot):
         return await message.answer("⚠️ <b>У вас нет рабочих VK аккаунтов!</b>\nСначала добавьте их.",
                                     reply_markup=keyboard, parse_mode="HTML")
 
-    await state.set_state(BroadcastState.waiting_for_target)
+    await state.set_state(BroadcastState.waiting_for_message)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data="connect_accs_menu")]
     ])
 
     await message.answer(
-        f"🚀 <b>Запуск рассылки VK</b>\n\n"
+        f"🚀 <b>Запуск рассылки по друзьям VK</b>\n\n"
         f"✅ Готово аккаунтов к работе: <b>{len(valid_accs)}</b>\n\n"
-        f"Отправьте <b>ID получателя или ссылку на беседу/пользователя VK</b>:",
+        f"💬 Отправьте <b>текст сообщения</b>, который будет разослан друзьям со всех ваших валидных аккаунтов:",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
 
 
-@router.message(BroadcastState.waiting_for_target, F.text)
-async def process_broadcast_target(message: Message, state: FSMContext):
-    await state.update_data(target=message.text.strip())
-    await state.set_state(BroadcastState.waiting_for_message)
-    await message.answer("💬 Теперь <b>отправьте текст сообщения</b> для рассылки:", parse_mode="HTML")
-
-
 @router.message(BroadcastState.waiting_for_message, F.text)
 async def process_broadcast_execution(message: Message, state: FSMContext):
-    data = await state.get_data()
-    target = data.get("target")
     broadcast_text = message.text
     await state.clear()
 
@@ -483,27 +513,34 @@ async def process_broadcast_execution(message: Message, state: FSMContext):
     accounts = db.get_user_vk_accounts(user_id)
     valid_accs = [a for a in accounts if a.get('is_valid', True)]
 
-    status_msg = await message.answer("🚀 <b>Рассылка запущена...</b>\n\nОтправка сообщений по аккаунтам...",
-                                      parse_mode="HTML")
+    status_msg = await message.answer(
+        "🚀 <b>Рассылка по друзьям запущена...</b>\n\nПолучаем список друзей для каждого аккаунта...", parse_mode="HTML")
 
-    success = 0
-    errors = 0
+    total_success = 0
+    total_errors = 0
 
     for acc in valid_accs:
         token = acc['token']
-        res = await send_vk_message(token=token, target=target, text=broadcast_text)
+        acc_name = acc.get('name', 'Аккаунт')
 
-        if res.get("success"):
-            success += 1
-        else:
-            errors += 1
+        # Получаем список ID друзей текущего аккаунта
+        friend_ids = await get_vk_friends(token)
+        if not friend_ids:
+            continue
 
-        await asyncio.sleep(1)
+        for friend_id in friend_ids:
+            res = await send_vk_message(token=token, target=str(friend_id), text=broadcast_text)
+            if res.get("success"):
+                total_success += 1
+            else:
+                total_errors += 1
+
+            await asyncio.sleep(1.5)  # Пауза между сообщениями во избежание флуд-контроля VK
 
     await status_msg.edit_text(
-        f"✅ <b>Рассылка завершена!</b>\n\n"
-        f"📤 Успешно отправлено: <b>{success}</b>\n"
-        f"🔴 Ошибок отправки: <b>{errors}</b>",
+        f"✅ <b>Рассылка по друзьям завершена!</b>\n\n"
+        f"📤 Успешно отправлено: <b>{total_success}</b>\n"
+        f"🔴 Ошибок отправки: <b>{total_errors}</b>",
         parse_mode="HTML"
     )
 
